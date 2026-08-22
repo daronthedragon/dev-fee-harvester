@@ -1,0 +1,46 @@
+{
+  "name": "dev-fee-harvester",
+  "version": "0.1.0",
+  "description": "Mass-select developer wallets and claim their pump.fun, PumpSwap and Bags creator fees in batched transactions.",
+  "type": "module",
+  "bin": {
+    "harvest": "./bin/harvest.mjs"
+  },
+  "main": "./src/claim.mjs",
+  "exports": {
+    ".": "./src/claim.mjs",
+    "./scan": "./src/scan.mjs",
+    "./preflight": "./src/preflight.mjs",
+    "./bags": "./src/bags.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "web",
+    "scripts"
+  ],
+  "scripts": {
+    "start": "node bin/harvest.mjs",
+    "scan": "node bin/harvest.mjs scan",
+    "claim": "node bin/harvest.mjs claim",
+    "dashboard": "node bin/harvest.mjs dashboard",
+    "test": "node --test test/*.test.mjs",
+    "verify:onchain": "node scripts/verify-onchain.mjs"
+  },
+  "keywords": [
+    "solana",
+    "pump.fun",
+    "pumpswap",
+    "bags",
+    "creator-fees",
+    "batch",
+    "cli"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}

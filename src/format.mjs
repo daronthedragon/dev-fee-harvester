@@ -1,0 +1,29 @@
+import { LAMPORTS_PER_SOL } from './constants.mjs';
+
+const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+const wrap = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+
+export const c = {
+  dim: wrap('2'),
+  bold: wrap('1'),
+  green: wrap('32'),
+  yellow: wrap('33'),
+  red: wrap('31'),
+  cyan: wrap('36'),
+  grey: wrap('90'),
+};
+
+/** Lamports as SOL, fixed to 6dp — enough to see dust, short enough to scan. */
+export function sol(lamports) {
+  return (lamports / LAMPORTS_PER_SOL).toFixed(6);
+}
+
+export const pad = (s, n) => String(s).padEnd(n);
+export const padStart = (s, n) => String(s).padStart(n);
+
+export function statusTag(status) {
+  if (status === 'ready') return c.green('ready');
+  if (status === 'blocked') return c.red('blocked');
+  if (status === 'empty') return c.grey('empty');
+  return c.dim(status ?? '');
+}

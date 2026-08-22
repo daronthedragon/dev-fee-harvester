@@ -1,0 +1,7 @@
+[
+  { "label": "dev-main", "secret": "PUT_A_BASE58_SECRET_KEY_HERE" },
+
+  { "label": "dev-02", "secret": [12, 34, 56, "…64 bytes total, the Solana CLI keypair format…"] },
+
+  { "label": "cold-watch", "pubkey": "9gquPn41Jjn3JEWwxfZU7894ACpaLzJD6fupcAqAdGZQ" }
+]

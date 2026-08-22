@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dev-fee-harvester</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #262d36; --fg: #e6edf3;
+    --muted: #8b949e; --green: #3fb950; --red: #f85149; --amber: #d29922; --accent: #58a6ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f6f8fa; --panel: #fff; --line: #d8dee4; --fg: #1f2328; --muted: #636c76; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding: 20px 24px 14px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0 0 4px; font-size: 17px; letter-spacing: -.2px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  main { padding: 18px 24px 60px; max-width: 1180px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  button { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+           padding: 7px 13px; border-radius: 6px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--green); border-color: var(--green); color: #04160a; font-weight: 600; }
+  button.danger { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+  .spacer { flex: 1; }
+  .total { font-size: 15px; font-weight: 600; }
+  .total span { color: var(--green); }
+  .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  tr.blocked { opacity: .55; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .addr { color: var(--muted); font-size: 12px; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; border: 1px solid; }
+  .tag.ready { color: var(--green); border-color: var(--green); }
+  .tag.blocked { color: var(--red); border-color: var(--red); }
+  .tag.empty { color: var(--muted); border-color: var(--line); }
+  .tag.partial { color: var(--amber); border-color: var(--amber); }
+  tr.sub td { border-bottom: 1px solid var(--line); }
+  .subcell { font-size: 12px; color: var(--muted); white-space: normal; padding-left: 18px; }
+  .gain { color: var(--green); margin-left: 6px; }
+  .scanfail { display: block; color: var(--red); margin-top: 3px; }
+  .reason { color: var(--muted); font-size: 11px; white-space: normal; max-width: 320px; }
+  input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  label.toggle { display: flex; gap: 6px; align-items: center; color: var(--muted); cursor: pointer; }
+  #log { margin-top: 18px; }
+  .row { padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); margin-bottom: 6px; }
+  .row.ok { border-left: 3px solid var(--green); }
+  .row.fail { border-left: 3px solid var(--red); }
+  .warn { background: color-mix(in srgb, var(--amber) 14%, transparent); border: 1px solid var(--amber);
+          padding: 9px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>dev-fee-harvester</h1>
+  <div class="sub" id="meta">loading…</div>
+</header>
+<main>
+  <div id="mode"></div>
+  <div class="bar">
+    <button id="rescan">Rescan</button>
+    <button id="all">Select all</button>
+    <button id="none">Select none</button>
+    <button id="ready">Select claimable</button>
+    <label class="toggle"><input type="checkbox" id="hideEmpty" checked> hide empty</label>
+    <div class="spacer"></div>
+    <div class="total"><span id="selTotal">0.000000</span> SOL · <span id="selCount">0</span> wallets</div>
+    <button class="primary" id="dry">Simulate</button>
+    <button class="danger" id="exec" disabled>Claim for real</button>
+  </div>
+
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th style="width:34px"><input type="checkbox" id="master"></th>
+        <th>Wallet</th><th>Address</th>
+        <th class="num">pump.fun</th><th class="num">PumpSwap</th><th class="num">Sharing</th><th class="num">Total</th>
+        <th>Status</th><th>Note</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div id="log"></div>
+</main>
+
+<script>
+const TOKEN = '__TOKEN__';
+const ALLOW_EXECUTE = __ALLOW_EXECUTE__;
+const sol = (l) => (l / 1e9).toFixed(6);
+let wallets = [], selected = new Set();
+
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, { ...opts, headers: { 'x-token': TOKEN, 'content-type': 'application/json' } });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+};
+
+// A sharing-config row can have a zero total for *you* while still moving
+// real money to the team, so "empty" has to mean "nothing to do at all".
+const hasWork = (w) => w.total > 0 || (w.distributions ?? []).some(d => d.distributable > 0);
+
+function render() {
+  const hideEmpty = document.getElementById('hideEmpty').checked;
+  const shown = wallets.filter(w => !hideEmpty || hasWork(w));
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '';
+  for (const w of shown) {
+    const tr = document.createElement('tr');
+    const on = selected.has(w.address);
+    tr.className = (on ? 'sel ' : '') + (w.status === 'blocked' ? 'blocked' : '');
+    tr.innerHTML = `
+      <td><input type="checkbox" ${on ? 'checked' : ''} ${w.status !== 'ready' ? 'disabled' : ''}></td>
+      <td>${w.label}${w.watchOnly ? ' <span class="addr">(watch-only)</span>' : ''}</td>
+      <td class="addr">${w.address.slice(0, 6)}…${w.address.slice(-6)}</td>
+      <td class="num">${sol(w.pump)}</td>
+      <td class="num">${sol(w.pumpswap)}</td>
+      <td class="num">${sol(w.sharing ?? 0)}</td>
+      <td class="num"><b>${sol(w.total)}</b></td>
+      <td><span class="tag ${w.status}">${w.status}</span>${w.partial ? ' <span class="tag partial">partial</span>' : ''}</td>
+      <td class="reason">${w.reason ?? ''}${w.sharingError
+        ? `<span class="scanfail">shareholder scan incomplete — totals may understate what is owed (${w.sharingError.slice(0, 80)})</span>`
+        : ''}</td>`;
+    tr.querySelector('input').addEventListener('change', (e) => {
+      e.target.checked ? selected.add(w.address) : selected.delete(w.address);
+      render();
+    });
+    tbody.appendChild(tr);
+
+    // Distributions move money out of a shared vault and split it by basis
+    // points, so what moves and what this wallet receives are different sums.
+    for (const d of w.distributions ?? []) {
+      const sub = document.createElement('tr');
+      sub.className = 'sub' + (d.blocked ? ' blocked' : '');
+      const what = d.blocked
+        ? `<span class="reason">${d.blocked}</span>`
+        : d.distributable > 0
+          ? `crank <b>${sol(d.distributable)}</b> SOL to ${d.shareholders} shareholder${d.shareholders === 1 ? '' : 's'}`
+          : '<span class="reason">cranked by another row</span>';
+      sub.innerHTML = `<td></td><td colspan="7" class="subcell">
+        └ ${d.kind === 'self' ? 'sharing config' : 'share in'}
+        <span class="addr">${d.mint.slice(0, 10)}…</span> · ${what}
+        ${d.userShare > 0 ? `<span class="gain">→ you receive ${sol(d.userShare)} SOL</span>` : ''}</td>`;
+      tbody.appendChild(sub);
+    }
+  }
+  const chosen = wallets.filter(w => selected.has(w.address));
+  document.getElementById('selTotal').textContent = sol(chosen.reduce((n, w) => n + w.total, 0));
+  document.getElementById('selCount').textContent = chosen.length;
+  document.getElementById('dry').disabled = chosen.length === 0;
+  document.getElementById('exec').disabled = chosen.length === 0 || !ALLOW_EXECUTE;
+}
+
+const setSel = (fn) => { selected = new Set(wallets.filter(fn).map(w => w.address)); render(); };
+
+async function scan() {
+  document.getElementById('meta').textContent = 'scanning…';
+  const data = await api('/api/scan');
+  wallets = data.wallets;
+  document.getElementById('meta').textContent =
+    `${wallets.length} wallets · fee payer ${data.payer.slice(0, 8)}… · ` +
+    `${sol(wallets.filter(w => w.status === 'ready').reduce((n, w) => n + w.total, 0))} SOL claimable`;
+  setSel(w => w.status === 'ready' && hasWork(w));
+}
+
+async function claim(execute) {
+  if (execute && !confirm(`Send real transactions claiming ${document.getElementById('selTotal').textContent} SOL from ${selected.size} wallet(s)?`)) return;
+  const log = document.getElementById('log');
+  log.innerHTML = '<div class="row">working…</div>';
+  try {
+    const data = await api('/api/claim', {
+      method: 'POST',
+      body: JSON.stringify({ addresses: [...selected], execute }),
+    });
+    log.innerHTML = `<div class="row"><b>${data.executed ? 'Executed' : 'Simulated'}</b> — ${data.results.length} transaction(s)</div>` +
+      data.results.map(r => `<div class="row ${r.ok ? 'ok' : 'fail'}">
+        <b>${r.ok ? 'ok' : 'failed'}</b> · ${r.label} · ${sol(r.lamports)} SOL · ${r.wallets.join(', ')}
+        ${r.signature ? `<br><a href="https://solscan.io/tx/${r.signature}" target="_blank" rel="noreferrer">${r.signature}</a>` : ''}
+        ${r.err ? `<br><span class="reason">${r.err}</span>` : ''}</div>`).join('');
+    if (execute) await scan();
+  } catch (e) {
+    log.innerHTML = `<div class="row fail">${e.message}</div>`;
+  }
+}
+
+document.getElementById('rescan').onclick = () => scan().catch(e => alert(e.message));
+document.getElementById('all').onclick = () => setSel(w => w.status === 'ready');
+document.getElementById('none').onclick = () => setSel(() => false);
+document.getElementById('ready').onclick = () => setSel(w => w.status === 'ready' && hasWork(w));
+document.getElementById('hideEmpty').onchange = render;
+document.getElementById('master').onchange = (e) => setSel(w => e.target.checked && w.status === 'ready');
+document.getElementById('dry').onclick = () => claim(false);
+document.getElementById('exec').onclick = () => claim(true);
+
+if (!ALLOW_EXECUTE) document.getElementById('mode').innerHTML =
+  '<div class="warn">Dry-run mode. Restart with <b>--execute</b> to enable real claims.</div>';
+
+scan().catch(e => { document.getElementById('meta').textContent = 'error: ' + e.message; });
+</script>
+</body>
+</html>
