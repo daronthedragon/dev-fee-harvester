@@ -21,9 +21,18 @@ export function sol(lamports) {
 export const pad = (s, n) => String(s).padEnd(n);
 export const padStart = (s, n) => String(s).padStart(n);
 
+/** Redraw a single status line in place, and clear it when finished. */
+export const progress = (text) => process.stderr.write(`\r${c.dim(text)}\x1b[K`);
+export const clearProgress = () => process.stderr.write('\r\x1b[K');
+
+/** Compact counts for long runs: 1234567 -> 1,234,567 */
+export const count = (n) => n.toLocaleString('en-US');
+
 export function statusTag(status) {
   if (status === 'ready') return c.green('ready');
   if (status === 'blocked') return c.red('blocked');
   if (status === 'empty') return c.grey('empty');
-  return c.dim(status ?? '');
+  // With --no-preflight nothing has been simulated, so say that rather than
+  // leaving a blank that reads as "fine".
+  return c.yellow(status ?? 'unchecked');
 }

@@ -5,7 +5,7 @@
 **Mass-select developer wallets and claim their creator fees in one go.**
 
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-26%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-34%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-blue)](#how-it-was-verified)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
@@ -16,6 +16,8 @@
 If you launch coins, your fees are scattered across a lot of wallets. Claiming them means opening each one, connecting it, clicking claim, and repeating — which is why most creators leave fees sitting in vaults for months.
 
 This finds every claimable fee across all of your wallets, shows you the total, lets you tick the ones you want, and drains them in **batched transactions** — up to 8 wallets co-signing a single transaction instead of one transaction per wallet.
+
+The wallet list is streamed, so there is no practical limit on how many wallets you point it at: 500,000 wallets scan in constant memory. See [Scale](#scale).
 
 Supports **pump.fun** (bonding-curve creator fees), **PumpSwap** (post-bonding fees, held as wrapped SOL), **team fee-sharing configs**, and **Bags**.
 
@@ -83,6 +85,41 @@ It binds to `127.0.0.1` only, and every API call needs a token minted at startup
 A claim is a small instruction, but every extra wallet adds a 64-byte signature and a 32-byte pubkey to the transaction. So batches are packed **by measurement, not by guesswork**: each candidate batch is compiled and its real serialised length checked against Solana's 1232-byte cap before another wallet is added.
 
 In practice that is ~8 wallets per transaction. Forty wallets settle in five transactions rather than forty, and you pay five base fees instead of forty.
+
+## Scale
+
+The wallet list is streamed, not loaded. Wallets that hold nothing are discarded the moment they are read, so peak memory tracks the number of **funded** wallets rather than the size of the list — there is no wallet count at which this falls over.
+
+Measured on a 500,000-wallet file with a stubbed RPC:
+
+```
+workers=8  scanned 500,000 in 75.2s  = 6,645 wallets/s
+  after   100,000: 5 MB retained
+  after   200,000: 5 MB retained
+  after   300,000: 5 MB retained
+  after   400,000: 5 MB retained
+  after   500,000: 5 MB retained
+found 5/5 planted; all correct: true
+```
+
+Flat. Three things get it there:
+
+- **Keys are derived lazily.** A Solana 64-byte secret key is `seed(32) || pubkey(32)`, so the public key is a slice, not an ed25519 derivation — measured at **279× cheaper**. Signing keys are built only for the wallets that actually enter a transaction. Loading 20,000 wallets went from 4481ms to 104ms.
+- **Deduplication happens late.** Holding a Set of every address seen cost ~1.1KB per wallet, five times the wallet records themselves. Duplicates are removed from the funded set instead, which is exact and free.
+- **Address derivation is threaded.** Each wallet needs three program addresses at ~280µs each, almost all of it inside the pure-JS `isOnCurve` check, and that — not the RPC — is the real floor on a large scan. Spreading it over 8 workers measured **5.7× faster**, with 0 address mismatches against the single-threaded reference across 12,000 addresses.
+
+For very large lists use JSONL, which streams line by line (a giant JSON array has to be materialised whole):
+
+```jsonl
+{"label":"dev-1","secret":"base58-secret-key"}
+{"label":"dev-2","pubkey":"9gquPn41Jjn3JEWwxfZU7894ACpaLzJD6fupcAqAdGZQ"}
+```
+
+```bash
+node bin/harvest.mjs scan --wallets wallets.jsonl --out found.jsonl --concurrency 32
+```
+
+`--out` appends each funded wallet the moment it is found, so a long run is useful even if you stop it early. On a private RPC raise `--concurrency`; on a strict one set `--rpc-delay`. RPC failures are retried with backoff and, if they still fail, reported — never silently treated as "no fees here".
 
 ## Fee sharing
 
@@ -162,7 +199,7 @@ Multi-wallet co-signing is checked cryptographically in the test suite (Ed25519 
 ## Development
 
 ```bash
-npm test                 # 26 tests, no network required
+npm test                 # 34 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 
@@ -178,6 +215,11 @@ npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 | `--execute` | actually send. Without it, everything is simulated |
 | `--priority-fee <n>` | compute unit price in micro-lamports |
 | `--max-per-tx <n>` | wallets per transaction (default 8) |
+| `--batch-size <n>` | wallets scanned per pass (default 1000) |
+| `--concurrency <n>` | parallel RPC requests (default 8; raise on a private RPC) |
+| `--workers <n>` | threads for address derivation (default cores-1, max 8; `0` disables) |
+| `--rpc-delay <ms>` | minimum gap between RPC requests, for strict rate limits |
+| `--out <file.jsonl>` | append every funded wallet as it is found |
 | `--find-shares` | also hunt fees held for you in team sharing configs (needs a private RPC) |
 | `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
 | `--json` | machine-readable scan output |

@@ -1,4 +1,5 @@
 import { VersionedTransaction } from '@solana/web3.js';
+import { canSign, signerFor } from './keys.mjs';
 
 /**
  * Bags (bags.fm) fee claiming.
@@ -82,14 +83,14 @@ export async function scanBags(client, wallets, { concurrency = 4, onProgress } 
 export async function claimBags(connection, client, rows, { dryRun = true, onEvent = () => {} } = {}) {
   const results = [];
   for (const row of rows) {
-    if (!row.keypair) { results.push({ label: row.label, ok: false, err: 'watch-only wallet cannot sign' }); continue; }
+    if (!canSign(row)) { results.push({ label: row.label, ok: false, err: 'watch-only wallet cannot sign' }); continue; }
     try {
       const positions = await client.claimablePositions(row.publicKey);
       for (const pos of positions) {
         const mint = pos.baseMint ?? pos.tokenMint;
         const txs = await client.claimTransactions(row.publicKey, mint);
         for (const tx of txs) {
-          tx.sign([row.keypair]);
+          tx.sign([signerFor(row)]);
           if (dryRun) {
             const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
             results.push({ label: row.label, mint, ok: sim.value.err === null, err: sim.value.err, simulated: true });

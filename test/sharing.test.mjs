@@ -107,19 +107,19 @@ test('each distribution is its own work item, needing no signature', () => {
   const kp = Keypair.generate();
   const mints = [MINT, new PublicKey('CyKe8fsA3U8povf4U59WLYQRn3RPohCgmSDibkmDWUPE')];
   const row = {
-    publicKey: kp.publicKey, label: 'dev', keypair: null,
+    publicKey: kp.publicKey, label: 'dev', secretKey: null,
     pumpLamports: 0, pumpswapLamports: 0, totalLamports: 0,
     distributions: mints.map((m) => ({ config: cfgFor(m, kp.publicKey), mint: m, distributable: 5e8, userShare: 5e8 })),
   };
   const items = workItems(row, kp.publicKey);
   assert.equal(items.length, 2, 'one item per distribution');
-  assert.ok(items.every((i) => i.kind === 'distribute' && i.signer === null));
+  assert.ok(items.every((i) => i.kind === 'distribute' && i.signerWallet === null && !i.needsSigner));
 });
 
 test('blocked distributions are excluded from the work list', () => {
   const kp = Keypair.generate();
   const row = {
-    publicKey: kp.publicKey, label: 'dev', keypair: null,
+    publicKey: kp.publicKey, label: 'dev', secretKey: null,
     pumpLamports: 0, pumpswapLamports: 0, totalLamports: 0,
     distributions: [
       { config: cfgFor(MINT, kp.publicKey), mint: MINT, distributable: 5e8, userShare: 5e8, blocked: 'SharingConfigNotActive' },
@@ -134,7 +134,7 @@ test('a wallet with many distributions spreads across transactions', () => {
   const kp = Keypair.generate();
   const mints = Array.from({ length: 13 }, () => Keypair.generate().publicKey);
   const row = {
-    publicKey: kp.publicKey, label: 'dev', keypair: null,
+    publicKey: kp.publicKey, label: 'dev', secretKey: null,
     pumpLamports: 0, pumpswapLamports: 0, totalLamports: 0,
     distributions: mints.map((m) => ({ config: cfgFor(m, kp.publicKey), mint: m, distributable: 1e8, userShare: 1e8 })),
   };

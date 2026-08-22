@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { claimAll, isActionable } from './claim.mjs';
 import { c, sol } from './format.mjs';
-import { loadWallets } from './keys.mjs';
+import { canSign, loadWallets } from './keys.mjs';
 import { preflight } from './preflight.mjs';
 import { scanWallets } from './scan.mjs';
 import { attachDistributions } from './sharing.mjs';
@@ -60,7 +60,7 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
         // Same rule as the CLI: richest signer pays; a watch-only set still
         // scans, it just cannot claim.
         const byBalance = (a, b) => (b.walletLamports ?? 0) - (a.walletLamports ?? 0);
-        const signers = scanned.filter((w) => w.keypair).sort(byBalance);
+        const signers = scanned.filter(canSign).sort(byBalance);
         const payer = signers[0] ?? [...scanned].sort(byBalance)[0];
         if (!payer) return json(res, 400, { error: 'no wallets loaded' });
         const withFees = scanned.filter(isActionable);
@@ -101,7 +101,7 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
         if (chosen.length === 0) return json(res, 400, { error: 'no known wallets in selection — rescan first' });
 
         const execute = Boolean(body.execute) && allowExecute;
-        const payer = cache.find((r) => r.keypair);
+        const payer = cache.find(canSign);
         const results = await claimAll(connection, chosen, payer, {
           dryRun: !execute,
           computeUnitPrice: Number(body.priorityFee ?? 0),

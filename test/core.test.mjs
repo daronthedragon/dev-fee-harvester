@@ -10,7 +10,7 @@ import {
 import { eventAuthority, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx } from '../src/ix.mjs';
 import { instructionsForWallet, packBatches, workItems } from '../src/claim.mjs';
-import { parseEntry } from '../src/keys.mjs';
+import { canSign, parseEntry, signerFor } from '../src/keys.mjs';
 import { explainError } from '../src/preflight.mjs';
 
 // A creator whose vault we resolved against mainnet while building this.
@@ -74,7 +74,7 @@ test('a PumpSwap claim prepends an idempotent ATA create', () => {
 });
 
 const rowFor = (kp, lamports = 1e8) => ({
-  publicKey: kp.publicKey, label: kp.publicKey.toBase58().slice(0, 4), keypair: kp,
+  publicKey: kp.publicKey, label: kp.publicKey.toBase58().slice(0, 4), secretKey: kp.secretKey,
   pumpLamports: lamports, pumpswapLamports: 0, totalLamports: lamports, status: 'ready',
 });
 
@@ -108,10 +108,10 @@ test('wallets load from secret arrays, and watch-only from a bare pubkey', () =>
   const kp = Keypair.generate();
   const signing = parseEntry([...kp.secretKey], 0);
   assert.equal(signing.publicKey.toBase58(), kp.publicKey.toBase58());
-  assert.ok(signing.keypair && !signing.watchOnly);
+  assert.ok(canSign(signing) && !signing.watchOnly);
 
   const watching = parseEntry(kp.publicKey.toBase58(), 1);
-  assert.equal(watching.keypair, null);
+  assert.equal(watching.secretKey, null);
   assert.ok(watching.watchOnly);
 });
 

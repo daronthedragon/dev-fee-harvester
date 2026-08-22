@@ -4,10 +4,12 @@ import process from 'node:process';
 import { LAMPORTS_PER_SOL } from '../src/constants.mjs';
 import { BagsClient, claimBags, scanBags } from '../src/bags.mjs';
 import { claimAll, isActionable, movedLamports } from '../src/claim.mjs';
-import { c, pad, padStart, sol, statusTag } from '../src/format.mjs';
-import { loadWallets } from '../src/keys.mjs';
+import { createWriteStream } from 'node:fs';
+import { c, clearProgress, count, pad, padStart, progress, sol, statusTag } from '../src/format.mjs';
+import { canSign, streamWallets } from '../src/keys.mjs';
 import { preflight } from '../src/preflight.mjs';
-import { scanWallets } from '../src/scan.mjs';
+import { scanStream } from '../src/scan.mjs';
+import { defaultWorkerCount } from '../src/derive.mjs';
 import { attachDistributions } from '../src/sharing.mjs';
 import { multiSelect } from '../src/select.mjs';
 import { startDashboard } from '../src/server.mjs';
@@ -28,6 +30,11 @@ ${c.bold('Options')}
   --execute            actually send. Without it everything is simulated only.
   --priority-fee <n>   compute unit price in micro-lamports (default 0)
   --max-per-tx <n>     wallets per transaction (default 8)
+  --batch-size <n>     wallets scanned per pass (default 1000)
+  --concurrency <n>    parallel RPC requests (default 8; raise on a private RPC)
+  --workers <n>        threads for address derivation (default: cores-1, max 8; 0 = off)
+  --rpc-delay <ms>     minimum gap between RPC requests, for strict rate limits
+  --out <file.jsonl>   append every wallet found with fees, as it is found
   --no-preflight       skip the per-wallet simulation pass
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
@@ -56,72 +63,99 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   const walletsPath = args.wallets ?? process.env.WALLETS ?? './wallets.json';
   const rpc = args.rpc ?? process.env.RPC ?? 'https://api.mainnet-beta.solana.com';
   const connection = new Connection(rpc, 'confirmed');
+  const wanted = typeof args.payer === 'string' ? args.payer : null;
+  const minLamports = Number(args.min ?? 0) * LAMPORTS_PER_SOL;
 
-  const wallets = await loadWallets(walletsPath).catch((e) => die(e.message));
-  if (wallets.length === 0) die('no wallets found');
-  console.error(c.dim(`${wallets.length} wallet(s) from ${walletsPath} · ${new URL(rpc).host}`));
+  console.error(c.dim(`${walletsPath} - ${new URL(rpc).host}`));
 
-  let rows = await scanWallets(connection, wallets, {
-    onProgress: (n, total) => process.stderr.write(`\r${c.dim(`scanning ${n}/${total} accounts`)}`),
-  });
-  process.stderr.write('\r\x1b[K');
+  // The wallet list is streamed, and only wallets that turn out to hold fees
+  // are retained. That is what lets the list be arbitrarily long: peak memory
+  // tracks the number of funded wallets, not the number of wallets.
+  const batches = streamWallets(walletsPath, { batchSize: Number(args['batch-size'] ?? 1000) });
+
+  let out = null;
+  if (typeof args.out === 'string') out = createWriteStream(args.out, { flags: 'a' });
+
+  // The fee payer usually has no fees of its own, so it would be filtered
+  // away. Track it as rows go past instead of keeping everything.
+  let payer = null;
+  const considerPayer = (row) => {
+    if (wanted) {
+      if (row.label === wanted || row.publicKey.toBase58() === wanted) payer = row;
+      return;
+    }
+    if (requireSigner && !canSign(row)) return;
+    if (!payer || (row.walletLamports ?? 0) > (payer.walletLamports ?? 0)) {
+      if (!requireSigner || canSign(row)) payer = row;
+    }
+  };
+
+  let rows = [];
+  let retries = 0;
+  try {
+    for await (const chunk of scanStream(batches, connection, {
+      workers: args.workers === undefined ? defaultWorkerCount() : Number(args.workers),
+      concurrency: Number(args.concurrency ?? 8),
+      minDelayMs: Number(args['rpc-delay'] ?? 0),
+      onRow: considerPayer,
+      onRetry: () => { retries++; },
+      onProgress: (scanned, found) =>
+        progress(`scanned ${count(scanned)} wallets - ${count(found)} with fees` + (retries ? ` - ${retries} retries` : '')),
+    })) {
+      for (const row of chunk) {
+        if (minLamports > 0 && row.totalLamports < minLamports && row.selfConfigDistributable <= 0) continue;
+        rows.push(row);
+        out?.write(JSON.stringify({
+          label: row.label, address: row.publicKey.toBase58(),
+          pumpLamports: row.pumpLamports, pumpswapLamports: row.pumpswapLamports,
+          totalLamports: row.totalLamports,
+        }) + String.fromCharCode(10));
+      }
+    }
+  } catch (e) {
+    clearProgress();
+    die(`scan failed: ${e.message}`);
+  }
+  clearProgress();
+  out?.end();
+
+  if (payer === null) die('no wallets found');
+  if (requireSigner && !canSign(payer)) {
+    die(wanted ? `--payer ${wanted} is watch-only and cannot pay fees`
+              : 'every wallet is watch-only; at least one signing key is needed to claim');
+  }
+  if (wanted && !payer) die(`--payer ${wanted} is not one of the loaded wallets`);
+  if ((payer.walletLamports ?? 0) < MIN_PAYER_LAMPORTS) {
+    console.error(c.yellow(`warning: fee payer ${payer.label} holds only ${sol(payer.walletLamports ?? 0)} SOL - ` +
+      'transactions may fail. Pass --payer <label|pubkey> to choose a funded wallet.'));
+  }
 
   if (args.bags) {
     const client = new BagsClient({ apiKey: process.env.BAGS_API_KEY });
     rows = await scanBags(client, rows, {
-      onProgress: (n, total) => process.stderr.write(`\r${c.dim(`bags ${n}/${total}`)}`),
+      onProgress: (n, total) => progress(`bags ${n}/${total}`),
     });
-    process.stderr.write('\r\x1b[K');
+    clearProgress();
     rows = rows.map((r) => ({ ...r, totalLamports: r.totalLamports + (r.bagsLamports ?? 0) }));
   }
 
   rows = await attachDistributions(connection, rows, {
     findShares: Boolean(args['find-shares']),
-    onProgress: (n, total) => process.stderr.write(`\r${c.dim(`shareholder scan ${n}/${total}`)}`),
+    onProgress: (n, total) => progress(`shareholder scan ${n}/${total}`),
   });
-  process.stderr.write('\r\x1b[K');
-
-  const min = Number(args.min ?? 0) * LAMPORTS_PER_SOL;
-  if (min > 0) rows = rows.filter((r) => r.totalLamports >= min);
-
-  const payer = pickPayer(rows, args.payer, { requireSigner });
-  if ((payer.walletLamports ?? 0) < MIN_PAYER_LAMPORTS) {
-    console.error(c.yellow(`warning: fee payer ${payer.label} holds only ${sol(payer.walletLamports ?? 0)} SOL — ` +
-      'transactions may fail. Pass --payer <label|pubkey> to choose a funded wallet.'));
-  }
+  clearProgress();
 
   if (!args['no-preflight']) {
     const withFees = rows.filter(isActionable);
     const checked = await preflight(connection, withFees, payer.publicKey, {
-      onProgress: (n, total) => process.stderr.write(`\r${c.dim(`preflight ${n}/${total}`)}`),
+      onProgress: (n, total) => progress(`preflight ${n}/${total}`),
     });
-    process.stderr.write('\r\x1b[K');
+    clearProgress();
     const byKey = new Map(checked.map((r) => [r.publicKey.toBase58(), r]));
     rows = rows.map((r) => byKey.get(r.publicKey.toBase58()) ?? { ...r, status: 'empty', reason: 'nothing to claim' });
   }
 
   return { connection, rows, payer };
-}
-
-/**
- * Choose who pays. Claiming needs a real signing key, but scanning only needs
- * a plausible pubkey to simulate against — so a watch-only wallet set stays
- * fully scannable instead of being turned away at the door.
- */
-function pickPayer(rows, wanted, { requireSigner } = {}) {
-  const signers = rows.filter((r) => r.keypair);
-  if (wanted && wanted !== true) {
-    const pool = requireSigner ? signers : rows;
-    const found = pool.find((r) => r.label === wanted || r.publicKey.toBase58() === wanted);
-    if (!found) die(`--payer ${wanted} is not one of the loaded ${requireSigner ? 'signing ' : ''}wallets`);
-    return found;
-  }
-  // Richest first: fees live in the vaults, so plenty of creator wallets are
-  // themselves empty and cannot pay for the transaction that drains them.
-  const byBalance = (a, b) => (b.walletLamports ?? 0) - (a.walletLamports ?? 0);
-  if (signers.length > 0) return [...signers].sort(byBalance)[0];
-  if (requireSigner) die('every wallet is watch-only; at least one signing key is needed to claim');
-  return [...rows].sort(byBalance)[0];
 }
 
 /** Rough floor: 5000 lamports per signature, and batches carry several. */

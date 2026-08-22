@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { packBatches, workItems } from '../src/claim.mjs';
+import { signerFor } from '../src/keys.mjs';
 
 /**
  * The whole point of this tool is that many wallets co-sign one transaction.
@@ -29,7 +30,7 @@ const verifySig = (message, signature, publicKey) => cryptoVerify(
 const rowFor = (kp) => ({
   publicKey: kp.publicKey,
   label: kp.publicKey.toBase58().slice(0, 4),
-  keypair: kp,
+  secretKey: kp.secretKey,
   pumpLamports: 1e8,
   pumpswapLamports: 0,
   totalLamports: 1e8,
@@ -48,7 +49,7 @@ test('every wallet in a batch produces a cryptographically valid signature', () 
     payerKey: payer.publicKey, recentBlockhash: BLOCKHASH, instructions: batches[0].instructions,
   }).compileToV0Message());
 
-  const signers = new Map(rows.map((r) => [r.publicKey.toBase58(), r.keypair]));
+  const signers = new Map(rows.map((r) => [r.publicKey.toBase58(), signerFor(r)]));
   signers.set(payer.publicKey.toBase58(), payer);
   tx.sign([...signers.values()]);
 

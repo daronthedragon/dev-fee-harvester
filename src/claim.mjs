@@ -6,6 +6,7 @@ import {
 import { WSOL_MINT } from './constants.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx, createAtaIdempotentIx } from './ix.mjs';
 import { distributeCreatorFeesIx } from './sharing.mjs';
+import { canSign, signerFor } from './keys.mjs';
 
 /** Hard cap on a Solana transaction, including signatures. */
 const MAX_TX_BYTES = 1232;
@@ -39,7 +40,11 @@ export function workItems(row, payer, quoteMint = WSOL_MINT) {
       instructions: direct,
       lamports: (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0),
       // A direct claim is the only thing here that needs the wallet's key.
-      signer: row.keypair ?? null,
+      // The wallet is carried, not the derived Keypair: deriving is ~280x the
+      // cost of reading a public key, so it waits until this item is actually
+      // going into a signed transaction.
+      signerWallet: canSign(row) ? row : null,
+      needsSigner: true,
       signerKey: row.publicKey,
     });
   }
@@ -54,7 +59,8 @@ export function workItems(row, payer, quoteMint = WSOL_MINT) {
       lamports: d.distributable,
       mint: d.mint,
       // distribute_creator_fees is permissionless — no signature at all.
-      signer: null,
+      signerWallet: null,
+      needsSigner: false,
       signerKey: null,
     });
   }
@@ -166,14 +172,14 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
     onEvent = () => {},
   } = options;
 
-  if (!payerWallet?.keypair) throw new Error('the fee payer must be a wallet with a signing key');
+  if (!canSign(payerWallet)) throw new Error('the fee payer must be a wallet with a signing key');
 
   const usable = rows.filter((r) => (r.status ?? 'ready') === 'ready');
   const items = usable.flatMap((r) => workItems(r, payerWallet.publicKey, quoteMint));
 
   // Only direct claims must sign. A sharing-config row is a PDA that can never
   // sign, and does not need to.
-  const unsignable = items.filter((i) => i.kind === 'claim' && !i.signer);
+  const unsignable = items.filter((i) => i.needsSigner && !i.signerWallet);
   if (unsignable.length > 0) {
     throw new Error(
       `cannot claim for watch-only wallet(s): ${[...new Set(unsignable.map((i) => i.label))].join(', ')}`,
@@ -192,9 +198,10 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
     try {
       const tx = compile(payerWallet.publicKey, blockhash, batch.instructions);
       // Deduplicate signers: the payer may also be one of the harvested wallets.
-      const signers = new Map([[payerWallet.publicKey.toBase58(), payerWallet.keypair]]);
+      // Derive signing keys only for the wallets in this one transaction.
+      const signers = new Map([[payerWallet.publicKey.toBase58(), signerFor(payerWallet)]]);
       for (const item of batch.items) {
-        if (item.signer) signers.set(item.signerKey.toBase58(), item.signer);
+        if (item.signerWallet) signers.set(item.signerKey.toBase58(), signerFor(item.signerWallet));
       }
       tx.sign([...signers.values()]);
 
