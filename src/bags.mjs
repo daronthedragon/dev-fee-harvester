@@ -2,7 +2,12 @@ import { VersionedTransaction } from '@solana/web3.js';
 import { canSign, signerFor } from './keys.mjs';
 
 /**
- * Bags (bags.fm) fee claiming.
+ * Bags (bags.fm) fee claiming. EXPERIMENTAL.
+ *
+ * This has never been exercised against the live Bags API — it was written
+ * from their published docs, with no API key to check it against. The
+ * endpoint paths, the response field names, and the shape of the returned
+ * transactions are all unconfirmed. Opt-in behind --bags; see the README.
  *
  * Bags does not expose a single on-chain instruction we can build ourselves —
  * a position may be a Meteora virtual pool, a DAMM v2 position, or a custom

@@ -19,7 +19,7 @@ This finds every claimable fee across all of your wallets, shows you the total, 
 
 The wallet list is streamed, so there is no practical limit on how many wallets you point it at: 500,000 wallets scan in constant memory. See [Scale](#scale).
 
-Supports **pump.fun** (bonding-curve creator fees), **PumpSwap** (post-bonding fees, held as wrapped SOL), **team fee-sharing configs**, and **Bags**.
+Supports **pump.fun** (bonding-curve creator fees), **PumpSwap** (post-bonding fees, held as wrapped SOL), and **team fee-sharing configs**. There is also an [experimental Bags adapter](#bags-experimental), off by default.
 
 ## Quick start
 
@@ -148,6 +148,25 @@ Sharing configs live under a **separate program**, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9
 
 > `--find-shares` issues one filtered `getProgramAccounts` per shareholder slot (27 of them). The public RPC rate-limits that hard. If a slot fails, the scan says so loudly and refuses to report a total, because a silent zero here is the one wrong answer that costs you money — use a private RPC for this flag.
 
+## Bags (experimental)
+
+> [!WARNING]
+> **This adapter has never been run against the live Bags API.** It was written from their published documentation and is covered by no tests beyond its own parsing. Treat it as a starting point, not a working feature.
+
+Everything else in this tool was verified by simulating the real instruction against mainnet before it was wired up. The Bags path could not be: it needs a `BAGS_API_KEY`, and without one the endpoints were never called even once. So unlike the pump.fun and PumpSwap paths, nothing here is backed by an observed response.
+
+Specifically unverified:
+
+- the endpoint paths and their response shapes — the docs show `claim-txs/v3` while other sources still reference `v2`, which is why both the base URL and the version are constructor options
+- the field names the totals are read from (`totalClaimableLamportsUserShare`, `baseMint`)
+- whether the returned transactions deserialise and sign as expected
+
+It is opt-in behind `--bags` and does nothing unless you pass that flag, so it cannot affect a normal harvest. If you do try it, run without `--execute` first: the dry run simulates whatever Bags hands back, and that simulation is the thing worth trusting rather than this adapter.
+
+The private-key handling is the one part that does not depend on their API being right — only public keys are sent, transactions come back unsigned, and signing happens locally.
+
+Reports from anyone with an API key are welcome; that is what it would take to drop the "experimental".
+
 ## Notes on correctness
 
 - **Nothing here is guessed.** Program IDs, instruction discriminators, account ordering, and PDA seeds are all read from the programs' own on-chain Anchor IDLs. Re-check them at any time with `npm run verify:onchain`, which also regenerates the error table.
@@ -157,7 +176,7 @@ Sharing configs live under a **separate program**, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9
 
 ## Your keys
 
-Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere — the Bags adapter posts only public keys and receives unsigned transactions, which are then signed on your machine.
+Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere — the [experimental Bags adapter](#bags-experimental) posts only public keys and receives unsigned transactions, which are then signed on your machine.
 
 `wallets.json` is in `.gitignore`. Keep it that way.
 
@@ -221,7 +240,7 @@ npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 | `--rpc-delay <ms>` | minimum gap between RPC requests, for strict rate limits |
 | `--out <file.jsonl>` | append every funded wallet as it is found |
 | `--find-shares` | also hunt fees held for you in team sharing configs (needs a private RPC) |
-| `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
+| `--bags` | include Bags positions (needs `BAGS_API_KEY`) — [experimental, unverified](#bags-experimental) |
 | `--json` | machine-readable scan output |
 
 ## License
