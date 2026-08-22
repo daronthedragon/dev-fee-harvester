@@ -2,24 +2,39 @@
 
 # dev-fee-harvester
 
-**Mass-select developer wallets and claim their creator fees in one go.**
+### Claim creator fees across every wallet you own — in one command.
 
-[![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-34%20passing-brightgreen)](#development)
-[![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-blue)](#how-it-was-verified)
+Finds the fees scattered across your dev wallets, tells you exactly what is claimable,<br>
+and drains them in batched transactions instead of one transaction per wallet.
+
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen)](#development)
+[![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
+[![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+
+<img src="assets/demo.svg" width="820" alt="Terminal output listing five developer wallets with their pump.fun, PumpSwap and fee-sharing balances, showing 0.98 SOL claimable and 2.97 SOL releasable by distribution">
+
+<sub>A real run against live mainnet wallets.</sub>
 
 </div>
 
 ---
 
-If you launch coins, your fees are scattered across a lot of wallets. Claiming them means opening each one, connecting it, clicking claim, and repeating — which is why most creators leave fees sitting in vaults for months.
+If you launch coins, your fees end up spread across a lot of wallets. Collecting them means opening each one, connecting it, clicking claim, and repeating — which is why most creators leave months of fees sitting in vaults.
 
-This finds every claimable fee across all of your wallets, shows you the total, lets you tick the ones you want, and drains them in **batched transactions** — up to 8 wallets co-signing a single transaction instead of one transaction per wallet.
+This finds all of it, shows you the total, lets you tick what you want, and claims it in as few transactions as physically fit.
 
-The wallet list is streamed, so there is no practical limit on how many wallets you point it at: 500,000 wallets scan in constant memory. See [Scale](#scale).
+## What it finds
 
-Supports **pump.fun** (bonding-curve creator fees), **PumpSwap** (post-bonding fees, held as wrapped SOL), and **team fee-sharing configs**. There is also an [experimental Bags adapter](#bags-experimental), off by default.
+| Source | Where the fees sit | Claimed with |
+| --- | --- | --- |
+| **pump.fun** | creator vault, as SOL | `collect_creator_fee` |
+| **PumpSwap** | vault ATA, as wrapped SOL | `collect_coin_creator_fee` |
+| **Fee sharing** | a vault owned by a *config PDA*, split by basis points | `distribute_creator_fees` |
+| **Bags** | Meteora pools / DAMM v2 / custom fee vaults | their API builds it, you sign locally |
+
+The third one is the interesting case. Those fees are **invisible to an ordinary per-wallet scan** — see [Fee sharing](#fee-sharing).
 
 ## Quick start
 
@@ -27,44 +42,31 @@ Supports **pump.fun** (bonding-curve creator fees), **PumpSwap** (post-bonding f
 npm install
 ```
 
-Create `wallets.json` (see [`wallets.example.json`](wallets.example.json)) — a base58 secret key, a Solana CLI keypair array, or a bare pubkey for watch-only:
+Create `wallets.json` — a base58 secret key, a Solana CLI keypair array, or a bare pubkey for watch-only:
 
 ```json
 [
-  { "label": "dev-main", "secret": "base58-secret-key" },
+  { "label": "dev-main",   "secret": "base58-secret-key" },
   { "label": "cold-watch", "pubkey": "9gquPn41Jjn3JEWwxfZU7894ACpaLzJD6fupcAqAdGZQ" }
 ]
 ```
 
-Then look before you leap:
+Look before you leap:
 
 ```bash
 node bin/harvest.mjs scan
 ```
 
-```
-WALLET    ADDRESS              PUMP     PUMPSWAP      SHARING        TOTAL  STATUS
-dev-main  9gquPn41Jj…      0.000000     0.000000     0.000000     0.000000  ready
-    └ sharing config HssQnt18Qz… · crank 2.669515 SOL to 1 shareholder
-dev-alt   7WjrJhR3WP…      0.000000     0.000000     0.000000     0.000000  ready
-    └ sharing config CuCET6nV7Q… · crank 0.298454 SOL to 1 shareholder
-dev-03    23QuARJvRD…      0.003625     0.000294     0.000000     0.003919  ready
-dev-04    3z4vj1nAuj…      0.002672     0.000000     0.000000     0.002672  ready
-
-0.006591 SOL claimable across 4 wallet(s)  ·  2.967969 SOL released by distribution
-```
-
-<sub>Real output against live mainnet wallets. The first two are not wallets at all — see [fee sharing](#fee-sharing).</sub>
-
-## Claiming
+Then claim:
 
 ```bash
 node bin/harvest.mjs claim
 ```
 
-Opens a terminal picker — `space` toggle, `a` all, `r` claimable only, `enter` confirm. Everything worth claiming is pre-ticked, so the common case is just `enter`.
+That opens a picker — <kbd>space</kbd> toggle, <kbd>a</kbd> all, <kbd>r</kbd> claimable only, <kbd>enter</kbd> confirm. Everything worth claiming is pre-ticked, so the usual answer is just <kbd>enter</kbd>.
 
-**Claiming is a dry run until you pass `--execute`.** Without it, every transaction is simulated against mainnet and you are told exactly what would land.
+> [!IMPORTANT]
+> **Claiming is a dry run until you pass `--execute`.** Without it every transaction is simulated against mainnet and you are told exactly what would land.
 
 ```bash
 node bin/harvest.mjs claim --all --execute --priority-fee 50000
@@ -76,21 +78,33 @@ node bin/harvest.mjs claim --all --execute --priority-fee 50000
 node bin/harvest.mjs dashboard
 ```
 
-A local page with a checkbox per wallet, select-all / select-claimable, a live running total, and per-transaction results linked to Solscan.
+The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan.
 
-It binds to `127.0.0.1` only, and every API call needs a token minted at startup and printed in the URL — this process holds signing keys, so an open port must not be enough to drive a claim. The dashboard is also dry-run unless you start it with `--execute`.
+It binds to `127.0.0.1` only and every API call carries a token minted at startup, because this process holds signing keys — an open port must not be enough to drive a claim. Also dry-run unless started with `--execute`.
 
-## How the batching works
+## How it works
 
-A claim is a small instruction, but every extra wallet adds a 64-byte signature and a 32-byte pubkey to the transaction. So batches are packed **by measurement, not by guesswork**: each candidate batch is compiled and its real serialised length checked against Solana's 1232-byte cap before another wallet is added.
+```mermaid
+flowchart LR
+  A[wallets.json<br/>or .jsonl] -->|streamed in batches| B[scan]
+  B -->|drops empty wallets| C[funded wallets only]
+  C --> D[preflight<br/>simulate each action]
+  D -->|ready| E[pack by measured size]
+  D -->|blocked| X[reported, excluded]
+  E --> F[sign + send<br/>~8 actions per tx]
+```
 
-In practice that is ~8 wallets per transaction. Forty wallets settle in five transactions rather than forty, and you pay five base fees instead of forty.
+Two decisions do most of the work.
+
+**Empty wallets are discarded as they are read.** Out of a million wallets, only the funded ones are ever retained, so memory tracks what you own rather than what you listed.
+
+**Batches are packed by measurement, not by guesswork.** Every extra signer costs 64 bytes of signature plus 32 of pubkey, and a distribution carries one account per shareholder, so each candidate batch is compiled and its real serialised length checked against Solana's 1232-byte limit before another action is added. In practice that is ~8 actions per transaction: forty wallets settle in five transactions instead of forty.
+
+**Every action is simulated on its own first.** One reverting claim would otherwise fail the whole transaction and nobody gets paid. Anything the chain rejects is dropped from the batch and reported with the program's own explanation.
 
 ## Scale
 
-The wallet list is streamed, not loaded. Wallets that hold nothing are discarded the moment they are read, so peak memory tracks the number of **funded** wallets rather than the size of the list — there is no wallet count at which this falls over.
-
-Measured on a 500,000-wallet file with a stubbed RPC:
+There is no wallet count at which this falls over. Measured on a 500,000-wallet file:
 
 ```
 workers=8  scanned 500,000 in 75.2s  = 6,645 wallets/s
@@ -102,89 +116,80 @@ workers=8  scanned 500,000 in 75.2s  = 6,645 wallets/s
 found 5/5 planted; all correct: true
 ```
 
-Flat. Three things get it there:
+| | Before | After |
+| --- | ---: | ---: |
+| Load 20,000 wallets | 4481 ms | **104 ms** |
+| Retained heap at 500k | ~2.8 GB projected | **5 MB, flat** |
+| Address derivation | 1,196 /s | **6,795 /s** |
 
-- **Keys are derived lazily.** A Solana 64-byte secret key is `seed(32) || pubkey(32)`, so the public key is a slice, not an ed25519 derivation — measured at **279× cheaper**. Signing keys are built only for the wallets that actually enter a transaction. Loading 20,000 wallets went from 4481ms to 104ms.
-- **Deduplication happens late.** Holding a Set of every address seen cost ~1.1KB per wallet, five times the wallet records themselves. Duplicates are removed from the funded set instead, which is exact and free.
-- **Address derivation is threaded.** Each wallet needs three program addresses at ~280µs each, almost all of it inside the pure-JS `isOnCurve` check, and that — not the RPC — is the real floor on a large scan. Spreading it over 8 workers measured **5.7× faster**, with 0 address mismatches against the single-threaded reference across 12,000 addresses.
+Three things got it there:
 
-For very large lists use JSONL, which streams line by line (a giant JSON array has to be materialised whole):
+- **Keys are derived lazily.** A Solana 64-byte secret key is `seed(32) || pubkey(32)`, so the public key is a slice, not an ed25519 derivation — measured **279× cheaper**. Signing keys are built only for wallets that actually enter a transaction.
+- **Deduplication happens late.** A Set of every address seen cost ~1.1 KB per wallet, five times the wallet records themselves. Duplicates are removed from the funded set instead — exact, and free.
+- **Address derivation is threaded.** Three program addresses per wallet at ~280 µs each, nearly all of it inside the pure-JS `isOnCurve` check — that, not the RPC, is the real floor. Eight workers measured **5.7× faster**, with 0 address mismatches against the single-threaded reference across 12,000 addresses.
 
-```jsonl
-{"label":"dev-1","secret":"base58-secret-key"}
-{"label":"dev-2","pubkey":"9gquPn41Jjn3JEWwxfZU7894ACpaLzJD6fupcAqAdGZQ"}
-```
+For very large lists use JSONL, which streams line by line:
 
 ```bash
 node bin/harvest.mjs scan --wallets wallets.jsonl --out found.jsonl --concurrency 32
 ```
 
-`--out` appends each funded wallet the moment it is found, so a long run is useful even if you stop it early. On a private RPC raise `--concurrency`; on a strict one set `--rpc-delay`. RPC failures are retried with backoff and, if they still fail, reported — never silently treated as "no fees here".
+`--out` appends each funded wallet the moment it is found, so a long run stays useful even if you stop it early.
 
 ## Fee sharing
 
-A large share of real creators split fees with a team through a **sharing config**. pump.fun implements this in a way that quietly defeats a naive claimer: it sets `bonding_curve.creator` to the *sharing config PDA* rather than to a wallet. Fees then pile up in a vault belonging to that PDA, and `collect_creator_fee` refuses to touch it with error `6050`.
+When a creator splits fees with a team, pump.fun sets `bonding_curve.creator` to the **sharing config PDA** rather than to a wallet. Fees then accumulate in a vault belonging to that PDA, and `collect_creator_fee` refuses to touch it with error `6050`.
 
-Two things follow, and both cost money if you ignore them.
+Two consequences, both of which cost money if ignored.
 
-**Those fees are invisible to a per-wallet scan.** The vault is not derived from any wallet you hold, so scanning your wallets reports zero while real SOL sits in a vault that names you as a shareholder. Run with `--find-shares` and the scan also hunts for configs where one of your wallets is a shareholder:
+**Those fees are invisible to a per-wallet scan.** The vault is not derived from any wallet you hold, so a normal scan reports zero while real SOL sits in a vault that names you as a shareholder. `--find-shares` hunts for configs where one of your wallets is a shareholder:
 
 ```
 shareholder 5bQMLqKtmi…      0.000000     0.000000     3.573280     3.573280  ready
     └ share in Hzm2XygHVB… · crank 0.746627 SOL to 3 shareholders  → you receive 0.253853 SOL
     └ share in HssQnt18Qz… · crank 2.669687 SOL to 1 shareholder   → you receive 2.669687 SOL
-    …
 ```
 
-That wallet reads as **0.000000 SOL** without the flag and **3.573280 SOL** with it.
+That wallet reads **0.000000 SOL** without the flag and **3.573280 SOL** with it.
 
-**Releasing them is a different instruction.** `distribute_creator_fees` splits the vault across the config's shareholders by basis points. It takes **no signer** — anyone may crank it, and the funds can only ever go to the shareholders the config already names, so cranking someone else's config does not let you take anything. This tool emits it automatically for any config it finds.
+**Releasing them is a different instruction.** `distribute_creator_fees` splits the vault across the config's shareholders by basis points. It takes **no signer** — anyone may crank it, and funds can only ever reach the shareholders the config already names, so cranking someone else's config gains you nothing.
 
-Because "what moves" and "what you receive" differ, the output shows both: the crank amount and your share of it.
+Because *what moves* and *what you receive* are different numbers, the output shows both.
 
-A migrated config also used to be able to poison a batch — one `6050` revert fails the whole transaction and nobody gets paid. Every unit of work is therefore simulated on its own first, and anything the chain rejects is dropped from the batch with the program's own explanation rather than taking its batch-mates down.
+Sharing configs live under a separate program, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ` (`pump_fees`) — which is why they are invisible if you look under pump.fun. That address is not hardcoded on trust; it is read from the `program` override in pump.fun's own IDL and re-checked by `npm run verify:onchain`.
 
-Sharing configs live under a **separate program**, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ` (`pump_fees`), which is why they are invisible if you look for them under pump.fun. That address is not hardcoded on trust — it is read from the `program` override on pump.fun's own IDL and re-checked by `npm run verify:onchain`.
+> [!NOTE]
+> `--find-shares` issues one filtered `getProgramAccounts` per shareholder slot (27 of them). The public RPC rate-limits that hard. A failed slot is reported rather than counted as zero, because a silent zero here is the one wrong answer that costs you money. Use a private RPC for this flag.
 
-> `--find-shares` issues one filtered `getProgramAccounts` per shareholder slot (27 of them). The public RPC rate-limits that hard. If a slot fails, the scan says so loudly and refuses to report a total, because a silent zero here is the one wrong answer that costs you money — use a private RPC for this flag.
+## Bags
 
-## Bags (experimental)
+Bags has no single instruction to build: a position may be a Meteora virtual pool, a DAMM v2 position, or one of two generations of custom fee vault, and their API decides which. So Bags builds the transactions and this signs them locally — only public keys go over the wire, and what comes back is unsigned.
 
-> [!WARNING]
-> **This adapter has never been run against the live Bags API.** It was written from their published documentation and is covered by no tests beyond its own parsing. Treat it as a starting point, not a working feature.
+Everything about the wire format was read out of the official [`@bagsfm/bags-sdk`](https://www.npmjs.com/package/@bagsfm/bags-sdk) rather than inferred from prose, which caught three things the documentation alone would not have:
 
-Everything else in this tool was verified by simulating the real instruction against mainnet before it was wired up. The Bags path could not be: it needs a `BAGS_API_KEY`, and without one the endpoints were never called even once. So unlike the pump.fun and PumpSwap paths, nothing here is backed by an observed response.
+| | Correct | Easy mistake |
+| --- | --- | --- |
+| Claim request field | `feeClaimer` | `wallet` |
+| Transaction encoding | base58 | base64 |
+| Transaction type | legacy `Transaction` | `VersionedTransaction` |
 
-Specifically unverified:
+Both endpoints are confirmed live: they answer `401` with Bags' own `{success:false,error}` envelope, while a nonexistent path answers `404` HTML.
 
-- the endpoint paths and their response shapes — the docs show `claim-txs/v3` while other sources still reference `v2`, which is why both the base URL and the version are constructor options
-- the field names the totals are read from (`totalClaimableLamportsUserShare`, `baseMint`)
-- whether the returned transactions deserialise and sign as expected
-
-It is opt-in behind `--bags` and does nothing unless you pass that flag, so it cannot affect a normal harvest. If you do try it, run without `--execute` first: the dry run simulates whatever Bags hands back, and that simulation is the thing worth trusting rather than this adapter.
-
-The private-key handling is the one part that does not depend on their API being right — only public keys are sent, transactions come back unsigned, and signing happens locally.
-
-Reports from anyone with an API key are welcome; that is what it would take to drop the "experimental".
-
-## Notes on correctness
-
-- **Nothing here is guessed.** Program IDs, instruction discriminators, account ordering, and PDA seeds are all read from the programs' own on-chain Anchor IDLs. Re-check them at any time with `npm run verify:onchain`, which also regenerates the error table.
-- The two programs spell the vault seed differently — pump.fun uses `creator-vault` (hyphen), PumpSwap uses `creator_vault` (underscore). Getting this wrong derives a valid-looking address that simply has no money in it.
-- The bonding-curve vault is a plain system account, so it must keep the rent-exempt minimum. Claimable amounts subtract that 890,880 lamports rather than promising you a balance that cannot move.
-- Fees accrue in the **vault**, not the wallet, so a creator sitting on 3 SOL of fees can have an empty wallet and be unable to pay a transaction fee. The fee payer defaults to your richest signing wallet, and you are warned if it is too thin.
+> [!NOTE]
+> The **authenticated** response path is still unconfirmed — verifying it needs a `BAGS_API_KEY`, which the author does not have. Field names and shapes come from the SDK's own TypeScript types, and the request/parse/sign path is covered by 21 tests, but no live authenticated call has been made. Enable it with `--bags`; it does nothing without that flag.
 
 ## Your keys
 
-Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere — the [experimental Bags adapter](#bags-experimental) posts only public keys and receives unsigned transactions, which are then signed on your machine.
+Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere. `wallets.json` is in `.gitignore` — keep it that way.
 
-`wallets.json` is in `.gitignore`. Keep it that way.
+The tool never needs a key to *look*: scanning works fine on watch-only pubkeys, so you can see what is claimable before you let it near a secret.
 
-## How it was verified
+## How this was verified
 
-Both instructions were simulated against real, funded mainnet vaults before any of it was wired up.
+Both pump.fun instructions were simulated against real, funded mainnet vaults before being wired up.
 
-`collect_creator_fee`:
+<details>
+<summary><b><code>collect_creator_fee</code></b> — sweeps a creator vault</summary>
 
 ```
 BEFORE  vault=65379194
@@ -193,8 +198,10 @@ ERR: null
 AFTER   vault=890880
 SWEPT   64488314 lamports out of the vault
 ```
+</details>
 
-`distribute_creator_fees`, against a config whose single shareholder holds 10000 bps:
+<details>
+<summary><b><code>distribute_creator_fees</code></b> — releases a shared vault to its shareholders</summary>
 
 ```
 Program log: Instruction: DistributeCreatorFees
@@ -202,8 +209,10 @@ ERR: null
 vault 2669529318 -> 890880  (moved 2668638438)
 holder 5bQMLqKtmi…: 2136720 -> 2670775158  (+2668638438)
 ```
+</details>
 
-And the batching end to end — 14 actions across two wallets, packed and simulated:
+<details>
+<summary><b>Batching end to end</b> — 14 actions across two wallets</summary>
 
 ```
 14 actions packed into 3 transaction(s)
@@ -212,36 +221,45 @@ batch 2: 6 actions, 1214/1232 bytes, err: null
 batch 3: 2 actions,  744/1232 bytes, err: null
 TOTAL MOVED: 4505246557 lamports = 4.505247 SOL
 ```
+</details>
 
-Multi-wallet co-signing is checked cryptographically in the test suite (Ed25519 verification of every signature slot), and batch packing is checked against the real 1232-byte serialised limit.
+Nothing here is guessed. Program IDs, discriminators, account ordering and PDA seeds are all read from the programs' own on-chain Anchor IDLs — re-check them any time with `npm run verify:onchain`, which also regenerates the error table.
 
-## Development
+A few details that are easy to get wrong, and are pinned by tests:
 
-```bash
-npm test                 # 34 tests, no network required
-npm run verify:onchain   # re-derive every constant from the on-chain IDLs
-```
+- pump.fun spells the vault seed `creator-vault` (hyphen); PumpSwap spells it `creator_vault` (underscore). The wrong one derives a valid-looking address with no money in it.
+- The bonding-curve vault is a plain system account, so it keeps the rent-exempt minimum. Claimable amounts subtract that 890,880 lamports rather than promising a balance that cannot move.
+- Fees accrue in the **vault**, not the wallet, so a creator holding 3 SOL of fees can have an empty wallet and be unable to pay the transaction fee. The payer defaults to your richest signing wallet, with a warning if it is too thin.
+- Multi-wallet co-signing is verified cryptographically (Ed25519 over every signature slot), not assumed.
 
 ## Options
 
 | Flag | |
-|---|---|
-| `--wallets <path>` | wallets JSON file, or a directory of keypair files |
-| `--rpc <url>` | RPC endpoint. A private one is strongly recommended; the public endpoint rate-limits hard |
+| --- | --- |
+| `--wallets <path>` | wallets JSON / JSONL file, or a directory of keypair files |
+| `--rpc <url>` | RPC endpoint. A private one is strongly recommended |
 | `--payer <key>` | who pays fees, by label or pubkey |
 | `--min <sol>` | ignore wallets below this amount |
 | `--all` | take every claimable wallet, no picker |
 | `--execute` | actually send. Without it, everything is simulated |
 | `--priority-fee <n>` | compute unit price in micro-lamports |
-| `--max-per-tx <n>` | wallets per transaction (default 8) |
+| `--max-per-tx <n>` | actions per transaction (default 8) |
 | `--batch-size <n>` | wallets scanned per pass (default 1000) |
-| `--concurrency <n>` | parallel RPC requests (default 8; raise on a private RPC) |
-| `--workers <n>` | threads for address derivation (default cores-1, max 8; `0` disables) |
+| `--concurrency <n>` | parallel RPC requests (default 8) |
+| `--workers <n>` | threads for address derivation (default cores−1, max 8; `0` disables) |
 | `--rpc-delay <ms>` | minimum gap between RPC requests, for strict rate limits |
 | `--out <file.jsonl>` | append every funded wallet as it is found |
-| `--find-shares` | also hunt fees held for you in team sharing configs (needs a private RPC) |
-| `--bags` | include Bags positions (needs `BAGS_API_KEY`) — [experimental, unverified](#bags-experimental) |
+| `--find-shares` | also hunt fees held for you in team sharing configs |
+| `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
+| `--no-preflight` | skip the per-action simulation pass |
 | `--json` | machine-readable scan output |
+
+## Development
+
+```bash
+npm test                 # 55 tests, no network required
+npm run verify:onchain   # re-derive every constant from the on-chain IDLs
+```
 
 ## License
 

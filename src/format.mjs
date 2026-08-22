@@ -21,9 +21,19 @@ export function sol(lamports) {
 export const pad = (s, n) => String(s).padEnd(n);
 export const padStart = (s, n) => String(s).padStart(n);
 
-/** Redraw a single status line in place, and clear it when finished. */
-export const progress = (text) => process.stderr.write(`\r${c.dim(text)}\x1b[K`);
-export const clearProgress = () => process.stderr.write('\r\x1b[K');
+/**
+ * Redraw a single status line in place, and clear it when finished.
+ *
+ * Silent when stderr is not a terminal: carriage-return overwriting only makes
+ * sense on a live terminal, and piping it into a file or a capture leaves a
+ * trail of half-overwritten counters instead of one tidy line.
+ */
+export const progress = (text) => {
+  if (process.stderr.isTTY) process.stderr.write(`\r${c.dim(text)}\x1b[K`);
+};
+export const clearProgress = () => {
+  if (process.stderr.isTTY) process.stderr.write('\r\x1b[K');
+};
 
 /** Compact counts for long runs: 1234567 -> 1,234,567 */
 export const count = (n) => n.toLocaleString('en-US');

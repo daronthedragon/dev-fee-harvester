@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import readline from 'node:readline';
 import path from 'node:path';
+import { decodeBase58 } from './base58.mjs';
 
 /**
  * Wallet loading.
@@ -24,21 +25,6 @@ import path from 'node:path';
  *      enormous array, so a JSONL file of any length is processed in constant
  *      memory.
  */
-
-const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-function decodeBase58(s) {
-  let n = 0n;
-  for (const ch of s) {
-    const i = BASE58.indexOf(ch);
-    if (i < 0) throw new Error('invalid base58 character');
-    n = n * 58n + BigInt(i);
-  }
-  const bytes = [];
-  while (n > 0n) { bytes.unshift(Number(n & 255n)); n >>= 8n; }
-  for (const ch of s) { if (ch === '1') bytes.unshift(0); else break; }
-  return Uint8Array.from(bytes);
-}
 
 const shortLabel = (pk) => `${pk.slice(0, 4)}..${pk.slice(-4)}`;
 

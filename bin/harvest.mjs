@@ -38,7 +38,7 @@ ${c.bold('Options')}
   --no-preflight       skip the per-wallet simulation pass
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
-                       EXPERIMENTAL: never run against the live Bags API
+                       note: authenticated responses are not yet confirmed live
   --port <n>           dashboard port (default 4600)
   --json               machine-readable output for scan
 

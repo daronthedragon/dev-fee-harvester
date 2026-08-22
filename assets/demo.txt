@@ -1,0 +1,12 @@
+$ harvest scan
+demo.tmp.json - api.mainnet-beta.solana.com
+
+WALLET   ADDRESS              PUMP     PUMPSWAP      SHARING        TOTAL  STATUS
+dev-main 9gquPn41Jj…      0.000000     0.000000     0.000000     0.000000  ready
+    └ sharing config HssQnt18Qz… · crank 2.670498 SOL to 1 shareholder
+dev-alt  7WjrJhR3WP…      0.000000     0.000000     0.000000     0.000000  ready
+    └ sharing config CuCET6nV7Q… · crank 0.298454 SOL to 1 shareholder
+dev-03   23QuARJvRD…      0.048904     0.000294     0.000000     0.049197  ready
+dev-04   3z4vj1nAuj…      0.935372     0.000000     0.000000     0.935372  ready
+
+0.984570 SOL claimable across 4 wallet(s)  ·  2.968952 SOL released by distribution

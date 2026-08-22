@@ -9,6 +9,7 @@ import {
   SYSTEM_PROGRAM,
 } from './constants.mjs';
 import { bondingCurve, eventAuthority, pumpCreatorVault, sharingConfig } from './pda.mjs';
+import { encodeBase58 } from './base58.mjs';
 
 /**
  * Fee sharing.
@@ -34,16 +35,6 @@ const MINT_OFFSET = 11;
 
 /** How many shareholder slots can physically fit in the fixed-size account. */
 export const SHAREHOLDER_SLOTS = Math.floor((SHARING_CONFIG_SIZE - SHAREHOLDERS_OFFSET) / SHAREHOLDER_SIZE);
-
-const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-function toBase58(bytes) {
-  let n = 0n;
-  for (const b of bytes) n = n * 256n + BigInt(b);
-  let s = '';
-  while (n > 0n) { s = BASE58[Number(n % 58n)] + s; n /= 58n; }
-  for (const b of bytes) { if (b === 0) s = '1' + s; else break; }
-  return s;
-}
 
 /** True when this account really is a SharingConfig owned by pump_fees. */
 export function isSharingConfig(info) {
@@ -131,7 +122,7 @@ export async function loadSharingConfigAt(connection, address) {
  */
 export async function findConfigsForShareholder(connection, wallet, options = {}) {
   const { slots = SHAREHOLDER_SLOTS, concurrency = 6, attempts = 4 } = options;
-  const discFilter = { memcmp: { offset: 0, bytes: toBase58(Buffer.from(SHARING_CONFIG_DISCRIMINATOR)) } };
+  const discFilter = { memcmp: { offset: 0, bytes: encodeBase58(SHARING_CONFIG_DISCRIMINATOR) } };
 
   const querySlot = async (i) => {
     let lastError;
