@@ -1,0 +1,6 @@
+# Revisions that only moved whitespace. Skip them in blame:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honours this file automatically.
+
+# Reformat with Prettier
+a0f958f5bd262fc19c00b5bab6d7009b3df48b75
