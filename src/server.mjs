@@ -101,7 +101,11 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
         if (chosen.length === 0) return json(res, 400, { error: 'no known wallets in selection — rescan first' });
 
         const execute = Boolean(body.execute) && allowExecute;
-        const payer = cache.find(canSign);
+        // Dry runs need no key, so fall back to the richest wallet; only a
+        // real send requires a signer, and claimAll enforces that itself.
+        const byBal = (a, b) => (b.walletLamports ?? 0) - (a.walletLamports ?? 0);
+        const payer = cache.filter(canSign).sort(byBal)[0] ?? [...cache].sort(byBal)[0];
+        if (!payer) return json(res, 400, { error: 'no wallets loaded' });
         const results = await claimAll(connection, chosen, payer, {
           dryRun: !execute,
           computeUnitPrice: Number(body.priorityFee ?? 0),

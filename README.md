@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-58%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -79,10 +79,14 @@ node bin/harvest.mjs dashboard
 ```
 
 <div align="center">
-  <img src="assets/dashboard.gif" width="900" alt="The dashboard listing five wallets with their pump.fun, PumpSwap and fee-sharing balances; the select-all, select-none and select-claimable buttons are clicked in turn and the running total updates to match the selection">
+  <img src="assets/dashboard.gif" width="900" alt="The dashboard lists wallets with their pump.fun, PumpSwap and fee-sharing balances; select-none then select-all tick every row and the running total follows, then Simulate returns one transaction of four actions worth 4.037043 SOL">
 </div>
 
+<sub>A real run: selecting four wallets and simulating the claim against mainnet — one transaction, four actions, 4.037043 SOL.</sub>
+
 The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan. Sharing-config rows expand to show what the crank releases and how much of it reaches you.
+
+**Simulating needs no private key.** A dry run is simulated with signature verification disabled, so previewing what a claim would do works on watch-only pubkeys — you can see exactly what would land before the tool goes anywhere near a secret. Sending, of course, still requires every real signature.
 
 It binds to `127.0.0.1` only and every API call carries a token minted at startup, because this process holds signing keys — an open port must not be enough to drive a claim. Also dry-run unless started with `--execute`.
 
@@ -186,7 +190,7 @@ Both endpoints are confirmed live: they answer `401` with Bags' own `{success:fa
 
 Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere. `wallets.json` is in `.gitignore` — keep it that way.
 
-The tool never needs a key to *look*: scanning works fine on watch-only pubkeys, so you can see what is claimable before you let it near a secret.
+The tool never needs a key to *look*. Scanning works on watch-only pubkeys, and so does simulating a claim — a dry run is verified against real chain state without a signature — so you can see exactly what would land before you let it near a secret. Only `--execute` requires keys.
 
 ## How this was verified
 
@@ -261,7 +265,7 @@ A few details that are easy to get wrong, and are pinned by tests:
 ## Development
 
 ```bash
-npm test                 # 55 tests, no network required
+npm test                 # 58 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 

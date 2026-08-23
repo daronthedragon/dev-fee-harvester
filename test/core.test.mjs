@@ -9,7 +9,7 @@ import {
 } from '../src/constants.mjs';
 import { eventAuthority, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx } from '../src/ix.mjs';
-import { instructionsForWallet, packBatches, workItems } from '../src/claim.mjs';
+import { claimAll, instructionsForWallet, packBatches, workItems } from '../src/claim.mjs';
 import { canSign, parseEntry, signerFor } from '../src/keys.mjs';
 import { explainError } from '../src/preflight.mjs';
 
@@ -135,4 +135,45 @@ test('unknown error codes still produce something readable', () => {
 test('rent floor constant matches what the program actually leaves behind', () => {
   // Observed directly: a swept vault settles at exactly this balance.
   assert.equal(SYSTEM_ACCOUNT_RENT_LAMPORTS, 890880);
+});
+
+test('a dry run needs no signing key at all', async () => {
+  // Previewing must not require exposing a secret: simulation runs with
+  // sigVerify disabled, so an unsigned transaction is a valid question to ask.
+  const watchOnly = { publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null };
+  const row = {
+    ...watchOnly, pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready',
+  };
+  let simulated = 0;
+  const connection = {
+    async getLatestBlockhash() { return { blockhash: BLOCKHASH, lastValidBlockHeight: 1 }; },
+    async simulateTransaction() { simulated++; return { value: { err: null, logs: [] } }; },
+  };
+
+  const results = await claimAll(connection, [row], watchOnly, { dryRun: true });
+  assert.equal(simulated, 1, 'the batch reached simulateTransaction');
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].simulated, true);
+});
+
+test('sending still refuses a watch-only fee payer', async () => {
+  const watchOnly = { publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null };
+  const row = { ...watchOnly, pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready' };
+  await assert.rejects(
+    () => claimAll({}, [row], watchOnly, { dryRun: false }),
+    /fee payer must be a wallet with a signing key/,
+  );
+});
+
+test('sending refuses a watch-only claimant even when the payer can sign', async () => {
+  const payerKp = Keypair.generate();
+  const payer = { publicKey: payerKp.publicKey, label: 'payer', secretKey: payerKp.secretKey };
+  const watchRow = {
+    publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null,
+    pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready',
+  };
+  await assert.rejects(
+    () => claimAll({}, [watchRow], payer, { dryRun: false }),
+    /cannot claim for watch-only wallet\(s\): watch/,
+  );
 });

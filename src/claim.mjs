@@ -172,19 +172,29 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
     onEvent = () => {},
   } = options;
 
-  if (!canSign(payerWallet)) throw new Error('the fee payer must be a wallet with a signing key');
+  // A dry run is simulated with sigVerify disabled, so it needs no keys at
+  // all: the point of the preview is to find out whether the instructions
+  // succeed against real chain state. Demanding a signing key to look would
+  // force anyone to expose a secret before they could see what they own.
+  // Sending, of course, still requires every real signature.
+  if (!dryRun) {
+    if (!canSign(payerWallet)) throw new Error('the fee payer must be a wallet with a signing key');
+
+    // Only direct claims must sign. A sharing-config row is a PDA that can
+    // never sign, and does not need to.
+    const unsignable = rows
+      .filter((r) => (r.status ?? 'ready') === 'ready')
+      .flatMap((r) => workItems(r, payerWallet.publicKey, quoteMint))
+      .filter((i) => i.needsSigner && !i.signerWallet);
+    if (unsignable.length > 0) {
+      throw new Error(
+        `cannot claim for watch-only wallet(s): ${[...new Set(unsignable.map((i) => i.label))].join(', ')}`,
+      );
+    }
+  }
 
   const usable = rows.filter((r) => (r.status ?? 'ready') === 'ready');
   const items = usable.flatMap((r) => workItems(r, payerWallet.publicKey, quoteMint));
-
-  // Only direct claims must sign. A sharing-config row is a PDA that can never
-  // sign, and does not need to.
-  const unsignable = items.filter((i) => i.needsSigner && !i.signerWallet);
-  if (unsignable.length > 0) {
-    throw new Error(
-      `cannot claim for watch-only wallet(s): ${[...new Set(unsignable.map((i) => i.label))].join(', ')}`,
-    );
-  }
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   const batches = packBatches(items, payerWallet.publicKey, { blockhash, computeUnitPrice, maxPerTx });
@@ -198,12 +208,14 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
     try {
       const tx = compile(payerWallet.publicKey, blockhash, batch.instructions);
       // Deduplicate signers: the payer may also be one of the harvested wallets.
-      // Derive signing keys only for the wallets in this one transaction.
-      const signers = new Map([[payerWallet.publicKey.toBase58(), signerFor(payerWallet)]]);
+      // Derive signing keys only for the wallets in this one transaction, and
+      // only for keys we actually hold — a dry run may hold none.
+      const signers = new Map();
+      if (canSign(payerWallet)) signers.set(payerWallet.publicKey.toBase58(), signerFor(payerWallet));
       for (const item of batch.items) {
         if (item.signerWallet) signers.set(item.signerKey.toBase58(), signerFor(item.signerWallet));
       }
-      tx.sign([...signers.values()]);
+      if (signers.size > 0) tx.sign([...signers.values()]);
 
       if (dryRun) {
         const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
