@@ -1,0 +1,68 @@
+#!/bin/sh
+# Format and lint whatever is being committed.
+#
+# Staged files only, so this stays fast enough to sit in front of every commit;
+# CI still checks the whole tree.
+#
+# One deliberate refusal: a file that is only partly staged is never rewritten.
+# Formatting it and re-adding would sweep the unstaged half into the commit,
+# which is a quiet way to commit work nobody meant to. Such a file is reported
+# instead, and the commit stops.
+#
+# Bypass with `git commit --no-verify` when you must. Note that the commit-msg
+# and pre-push attribution guards are separate hooks and still apply.
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Nothing to do without the toolchain — a fresh clone should still be able to
+# commit.
+if [ ! -x node_modules/.bin/eslint ] || [ ! -x node_modules/.bin/prettier ]; then
+  echo "pre-commit: node_modules missing, skipping lint and format (run: npm ci)"
+  exit 0
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(mjs|js|json|md|html|yml|yaml)$' || true)
+[ -n "$staged" ] || exit 0
+
+# Files with unstaged changes as well: check only, never rewrite.
+partial=""
+clean=""
+for f in $staged; do
+  if git diff --name-only -- "$f" | grep -qx "$f"; then
+    partial="$partial $f"
+  else
+    clean="$clean $f"
+  fi
+done
+
+fail=0
+
+if [ -n "$partial" ]; then
+  # shellcheck disable=SC2086
+  if ! node_modules/.bin/prettier --check $partial >/dev/null 2>&1; then
+    echo "pre-commit: these files are staged only in part and are not formatted."
+    echo "            they were left untouched so the unstaged half is not swept in:"
+    for f in $partial; do echo "              $f"; done
+    echo "            stage the rest, or run: npm run format"
+    fail=1
+  fi
+fi
+
+if [ -n "$clean" ]; then
+  # shellcheck disable=SC2086
+  node_modules/.bin/prettier --write --log-level warn $clean
+  # shellcheck disable=SC2086
+  git add $clean
+fi
+
+lintable=$(echo "$staged" | grep -E '\.(mjs|js|html)$' || true)
+if [ -n "$lintable" ]; then
+  # shellcheck disable=SC2086
+  if ! node_modules/.bin/eslint $lintable; then
+    echo "pre-commit: eslint found problems above. Fix them, or commit with --no-verify."
+    fail=1
+  fi
+fi
+
+exit $fail
