@@ -26,7 +26,8 @@
     "dashboard": "node bin/harvest.mjs dashboard",
     "test": "node --test test/*.test.mjs",
     "verify:onchain": "node scripts/verify-onchain.mjs",
-    "test:browser": "node --test test/browser.test.mjs"
+    "test:browser": "node --test test/browser.test.mjs",
+    "browsers:install": "playwright-core install firefox webkit"
   },
   "keywords": [
     "solana",
