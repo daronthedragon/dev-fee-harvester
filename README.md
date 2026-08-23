@@ -327,6 +327,8 @@ git config core.hooksPath .githooks
 >
 > For the same reason this repo does not use husky: husky sets `core.hooksPath` per repo, which would disable any global hooks you rely on.
 
+`.githooks/pre-push` runs the whole suite before a push — about twenty seconds, against CI reporting minutes later. It skips if `node_modules` is absent, and browser tests skip themselves when an engine is missing, so it never insists on a browser CI is going to check anyway. Bypass either hook with `--no-verify`.
+
 The dashboard is covered at two levels, both against `web/index.html` exactly as the server serves it — same file, same placeholders — with only the API stubbed.
 
 - **`test/dashboard.test.mjs`** runs the page in jsdom and drives the real script: rendering, filtering, the share disclosure, selection, what Simulate posts, the execute guard.

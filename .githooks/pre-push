@@ -1,0 +1,40 @@
+#!/bin/sh
+# Run the test suite before pushing.
+#
+# CI is the authority, but it reports minutes later and a red main branch is
+# worth more than the seconds saved here. The whole suite runs in about twenty.
+#
+# Browser tests skip on their own when an engine is missing, so this does not
+# insist on them — that distinction is CI's job, where the engines are known
+# to be installed.
+#
+# Bypass with `git push --no-verify`. The attribution guard is a separate hook
+# and is not bypassed by this one.
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [ ! -d node_modules ]; then
+  echo "pre-push: node_modules missing, skipping tests (run: npm ci)"
+  exit 0
+fi
+
+out=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/pre-push-tests.$$")
+trap 'rm -f "$out"' EXIT
+
+echo "pre-push: running tests..."
+if npm test >"$out" 2>&1; then
+  grep -E '^# (tests|pass|fail|skipped)' "$out" | sed 's/^/  /'
+  exit 0
+fi
+
+echo "" >&2
+echo "push blocked: tests failed" >&2
+echo "" >&2
+grep -E '^not ok|^ *not ok' "$out" | head -20 | sed 's/^/  /' >&2
+grep -E '^# (tests|pass|fail|skipped)' "$out" | sed 's/^/  /' >&2
+echo "" >&2
+echo "  Full output:   npm test" >&2
+echo "  Push anyway:   git push --no-verify" >&2
+echo "" >&2
+exit 1
