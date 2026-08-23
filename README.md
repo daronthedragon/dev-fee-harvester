@@ -307,7 +307,20 @@ npm run format              # apply it
 npm run verify:onchain      # re-derive every constant from the on-chain IDLs
 ```
 
-### Pre-commit hook
+### Tests and CI
+
+The dashboard is covered at two levels, both against `web/index.html` exactly as the server serves it — same file, same placeholders — with only the API stubbed.
+
+- **`test/dashboard.test.mjs`** runs the page in jsdom and drives the real script: rendering, filtering, the share disclosure, selection, what Simulate posts, the execute guard.
+- **`test/browser.test.mjs`** runs it in real engines through Playwright, for what jsdom has no answer for: horizontal overflow, whether the toolbar wraps, whether the dark and light palettes apply, whether the selection highlight actually paints, and whether the disclosure works from the keyboard alone.
+
+Those fourteen browser tests run **per engine**. Chromium uses whatever branded browser is already installed and downloads nothing; Firefox and WebKit have no system equivalent Playwright can drive, so they run once `npm run browsers:install` has fetched them. Any engine that is missing skips rather than fails, and the skips are reported per test so absent coverage is visible rather than silent. `BROWSER_ENGINES=chromium` narrows the run; `NO_BROWSER_TESTS=1` turns them off.
+
+CI runs the whole suite three ways: Ubuntu on Node 20 and 22 with all three engines, and Windows on Node 22 with Chromium alone — Windows is there for path and platform handling, and its minutes bill at double, so a second copy of the same engine coverage buys nothing. It fails if a test skips for any reason other than that engine selection, since a browser that failed to install would otherwise pass quietly. A weekly job re-derives every on-chain constant from the deployed programs, so a program upgrade shows up as a build failure rather than as a wrong number.
+
+Every bug in this list reached the published README before a test did, and each one now fails the suite if reintroduced: "hide empty" swallowing sharing rows, an expand/collapse that was documented but never built, and a toolbar that wrapped at narrower widths.
+
+### Git hooks
 
 `.githooks/pre-commit` formats staged files, re-stages them, and lints them. It skips quietly if `node_modules` is missing, and a file that is staged only in part is reported rather than rewritten — formatting and re-adding it would sweep the unstaged half into the commit.
 
@@ -328,17 +341,6 @@ git config core.hooksPath .githooks
 > For the same reason this repo does not use husky: husky sets `core.hooksPath` per repo, which would disable any global hooks you rely on.
 
 `.githooks/pre-push` runs the whole suite before a push — about twenty seconds, against CI reporting minutes later. It skips if `node_modules` is absent, and browser tests skip themselves when an engine is missing, so it never insists on a browser CI is going to check anyway. Bypass either hook with `--no-verify`.
-
-The dashboard is covered at two levels, both against `web/index.html` exactly as the server serves it — same file, same placeholders — with only the API stubbed.
-
-- **`test/dashboard.test.mjs`** runs the page in jsdom and drives the real script: rendering, filtering, the share disclosure, selection, what Simulate posts, the execute guard.
-- **`test/browser.test.mjs`** runs it in real engines through Playwright, for what jsdom has no answer for: horizontal overflow, whether the toolbar wraps, whether the dark and light palettes apply, whether the selection highlight actually paints, and whether the disclosure works from the keyboard alone.
-
-Those fourteen browser tests run **per engine**. Chromium uses whatever branded browser is already installed and downloads nothing; Firefox and WebKit have no system equivalent Playwright can drive, so they run once `npm run browsers:install` has fetched them. Any engine that is missing skips rather than fails, and the skips are reported per test so absent coverage is visible rather than silent. `BROWSER_ENGINES=chromium` narrows the run; `NO_BROWSER_TESTS=1` turns them off.
-
-CI runs the whole suite three ways: Ubuntu on Node 20 and 22 with all three engines, and Windows on Node 22 with Chromium alone — Windows is there for path and platform handling, and its minutes bill at double, so a second copy of the same engine coverage buys nothing. It fails if a test skips for any reason other than that engine selection, since a browser that failed to install would otherwise pass quietly. A weekly job re-derives every on-chain constant from the deployed programs, so a program upgrade shows up as a build failure rather than as a wrong number.
-
-Every bug in this list reached the published README before a test did, and each one now fails the suite if reintroduced: "hide empty" swallowing sharing rows, an expand/collapse that was documented but never built, and a toolbar that wrapped at narrower widths.
 
 ## License
 
