@@ -84,7 +84,9 @@ jobs:
           set +o pipefail
 
           skipped=$(grep -E '^# skipped' test-output.txt | awk '{print $3}')
-          unexpected=$(grep '# SKIP' test-output.txt | grep -vc 'not in BROWSER_ENGINES')
+          # grep exits non-zero when it matches nothing, which is the happy
+          # path here, so it must not take the step down with it.
+          unexpected=$(grep '# SKIP' test-output.txt | grep -vc 'not in BROWSER_ENGINES' || true)
           echo "skipped: ${skipped:-unknown} (unexpected: ${unexpected:-0})"
           if [ "${unexpected:-1}" != "0" ]; then
             echo "::error::${unexpected} test(s) skipped for a reason other than this leg's engine selection"
