@@ -298,6 +298,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 npm test                    # 150 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
+npm run lint                # eslint, including the dashboard's inline script
 npm run verify:onchain      # re-derive every constant from the on-chain IDLs
 ```
 

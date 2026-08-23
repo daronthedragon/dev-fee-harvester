@@ -1,3 +1,5 @@
+import { delay } from '../src/limit.mjs';
+
 /**
  * Wallet payloads in the shape `/api/scan` returns, shared by the jsdom and
  * the browser suites so the two cannot drift apart.
@@ -41,7 +43,7 @@ export async function waitFor(fn, what = 'condition', tries = 300) {
   for (let i = 0; i < tries; i++) {
     const value = await fn();
     if (value) return value;
-    await new Promise((r) => setTimeout(r, 10));
+    await delay(10);
   }
   throw new Error(`timed out waiting for ${what}`);
 }

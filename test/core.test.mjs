@@ -10,7 +10,7 @@ import {
 import { eventAuthority, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx } from '../src/ix.mjs';
 import { claimAll, instructionsForWallet, packBatches, workItems } from '../src/claim.mjs';
-import { canSign, parseEntry, signerFor } from '../src/keys.mjs';
+import { canSign, parseEntry } from '../src/keys.mjs';
 import { explainError } from '../src/preflight.mjs';
 
 // A creator whose vault we resolved against mainnet while building this.

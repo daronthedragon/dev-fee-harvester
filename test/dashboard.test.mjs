@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { delay } from '../src/limit.mjs';
 
 /**
  * DOM tests for the dashboard.
@@ -54,7 +55,7 @@ const waitFor = async (fn, what = 'condition', tries = 200) => {
   for (let i = 0; i < tries; i++) {
     const value = fn();
     if (value) return value;
-    await new Promise((r) => setTimeout(r, 5));
+    await delay(5);
   }
   throw new Error(`timed out waiting for ${what}`);
 };

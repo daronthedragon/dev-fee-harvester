@@ -8,9 +8,9 @@ import {
   SYSTEM_ACCOUNT_RENT_LAMPORTS,
   SYSTEM_PROGRAM,
 } from './constants.mjs';
-import { bondingCurve, eventAuthority, pumpCreatorVault, sharingConfig } from './pda.mjs';
+import { bondingCurve, eventAuthority, pumpCreatorVault } from './pda.mjs';
 import { encodeBase58 } from './base58.mjs';
-import { createLimiter } from './limit.mjs';
+import { createLimiter, delay } from './limit.mjs';
 
 /**
  * Fee sharing.
@@ -101,19 +101,6 @@ export function shareFor(config, wallet, distributable) {
 }
 
 /**
- * Case 1: the address handed to us IS a sharing config.
- *
- * This is what a "blocked" wallet usually turns out to be — a config PDA that
- * ended up in a wallet list because it is the bonding curve's creator. No
- * scanning needed: the account at that address already holds the mint.
- */
-export async function loadSharingConfigAt(connection, address) {
-  const info = await connection.getAccountInfo(address);
-  if (!isSharingConfig(info)) return null;
-  return decodeSharingConfig(address, info.data);
-}
-
-/**
  * Case 2: find every sharing config in which this wallet is a shareholder.
  *
  * Shareholders sit at fixed offsets, so this probes each slot with a server
@@ -138,7 +125,7 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
         });
       } catch (err) {
         lastError = err;
-        await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** attempt));
+        await delay(baseDelayMs * 2 ** attempt);
       }
     }
     // Never swallow this. A rate-limited slot that quietly returns nothing
@@ -162,8 +149,8 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
   return [...seen.values()];
 }
 
-/** Attach live vault balances to a set of configs. */
-export async function withVaultBalances(connection, configs) {
+/** Attach live vault balances to a set of configs. Module-internal. */
+async function withVaultBalances(connection, configs) {
   if (configs.length === 0) return [];
   const vaults = configs.map((cfg) => pumpCreatorVault(cfg.address));
   const infos = [];
@@ -177,9 +164,6 @@ export async function withVaultBalances(connection, configs) {
     distributable: distributableLamports(infos[i]?.lamports ?? 0),
   }));
 }
-
-/** Convenience: derive the config PDA for a mint (pump_fees owns it). */
-export const configForMint = (mint) => sharingConfig(mint);
 
 /**
  * Work out which distributions each row can trigger.

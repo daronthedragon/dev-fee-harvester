@@ -85,9 +85,6 @@ export const isActionable = (row) =>
   (row.pumpswapLamports ?? 0) > 0 ||
   (row.distributions ?? []).some((d) => d.distributable > 0);
 
-/** Only direct claims need this wallet's signature; distributions do not. */
-export const needsSignature = (row) => (row.pumpLamports ?? 0) > 0 || (row.pumpswapLamports ?? 0) > 0;
-
 function compile(payer, blockhash, instructions) {
   return new VersionedTransaction(
     new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions })

@@ -1,10 +1,10 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { claimAll, isActionable } from './claim.mjs';
 import { createLimiter } from './limit.mjs';
-import { c, sol } from './format.mjs';
+import { c } from './format.mjs';
 import { canSign, loadWallets } from './keys.mjs';
 import { preflight } from './preflight.mjs';
 import { scanWallets } from './scan.mjs';
@@ -141,7 +141,7 @@ export async function startDashboard({
     return json(res, 404, { error: 'not found' });
   });
 
-  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  await new Promise((resolve) => { server.listen(port, '127.0.0.1', resolve); });
   const link = `http://127.0.0.1:${port}/?token=${token}`;
   console.log(`${c.bold('dashboard')} ${c.cyan(link)}`);
   console.log(c.dim(`${wallets.length} wallet(s) loaded · ${execLabel(allowExecute)}`));

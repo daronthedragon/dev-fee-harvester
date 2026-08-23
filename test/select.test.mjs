@@ -20,10 +20,12 @@ function withFakeTerminal(run) {
   input.resume = () => input;
   input.pause = () => input;
 
-  const press = (name) => new Promise((resolve) => setImmediate(() => {
-    input.emit('keypress', '', { name, ctrl: false, meta: false, shift: false });
-    setImmediate(resolve);
-  }));
+  const press = (name) => new Promise((resolve) => {
+    setImmediate(() => {
+      input.emit('keypress', '', { name, ctrl: false, meta: false, shift: false });
+      setImmediate(resolve);
+    });
+  });
 
   return run({ press, out, input, output: () => buffer });
 }

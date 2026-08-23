@@ -95,9 +95,6 @@ export function signerFor(wallet) {
   return kp;
 }
 
-/** Drop cached signing keys (used when a long run is finished with them). */
-export const forgetSigners = () => signerCache.clear();
-
 async function* streamEntries(target) {
   const info = await stat(target).catch(() => null);
   if (!info) throw new Error(`no such wallets file or directory: ${target}`);
@@ -162,11 +159,4 @@ export async function loadWallets(target, options = {}) {
   const all = [];
   for await (const batch of streamWallets(target, { dedupe: true, ...options })) all.push(...batch);
   return all;
-}
-
-/** Count wallets without retaining them. */
-export async function countWallets(target, options = {}) {
-  let n = 0;
-  for await (const batch of streamWallets(target, options)) n += batch.length;
-  return n;
 }

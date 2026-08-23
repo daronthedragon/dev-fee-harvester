@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  Keypair, PublicKey, SystemProgram, Transaction,
-} from '@solana/web3.js';
+import { Keypair, SystemProgram, Transaction } from '@solana/web3.js';
 import { decodeBase58, encodeBase58 } from '../src/base58.mjs';
 import { BagsApiError, BagsClient, claimBags, positionMint, scanBags } from '../src/bags.mjs';
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import process from 'node:process';
 import { LAMPORTS_PER_SOL } from '../src/constants.mjs';
 import { BagsClient, claimBags, scanBags } from '../src/bags.mjs';
-import { claimAll, isActionable, movedLamports } from '../src/claim.mjs';
+import { claimAll, isActionable } from '../src/claim.mjs';
 import { createWriteStream } from 'node:fs';
 import { c, clearProgress, count, pad, padStart, progress, setProgressMode, sol, statusTag } from '../src/format.mjs';
 import { canSign, streamWallets } from '../src/keys.mjs';

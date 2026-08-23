@@ -4,7 +4,7 @@ import { Keypair } from '@solana/web3.js';
 import { createDerivePool, defaultWorkerCount, deriveForWallet } from '../src/derive.mjs';
 import { associatedTokenAddress, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
 import { WSOL_MINT } from '../src/constants.mjs';
-import { createLimiter, withRetry, forEachBatch } from '../src/limit.mjs';
+import { createLimiter, delay, withRetry, forEachBatch } from '../src/limit.mjs';
 
 test('deriveForWallet returns the creator vault and the PumpSwap vault ATA', () => {
   const pk = Keypair.generate().publicKey;
@@ -60,7 +60,7 @@ test('the limiter never exceeds its concurrency', async () => {
   await Promise.all(Array.from({ length: 40 }, () => limit(async () => {
     inFlight++;
     peak = Math.max(peak, inFlight);
-    await new Promise((r) => setTimeout(r, 5));
+    await delay(5);
     inFlight--;
   })));
   assert.ok(peak <= 3, `peak concurrency was ${peak}`);

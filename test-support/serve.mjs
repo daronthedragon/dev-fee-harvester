@@ -38,11 +38,11 @@ export async function serveDashboard({ wallets = [], allowExecute = false, claim
     return res.end(JSON.stringify(payload));
   });
 
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}/?token=${TEST_TOKEN}`,
     calls,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () => new Promise((resolve) => { server.close(resolve); }),
   };
 }

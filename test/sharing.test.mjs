@@ -9,7 +9,7 @@ import {
   SHAREHOLDER_SLOTS, decodeSharingConfig, distributeCreatorFeesIx, distributableLamports,
   findConfigsForShareholder, isSharingConfig, shareFor,
 } from '../src/sharing.mjs';
-import { createLimiter } from '../src/limit.mjs';
+import { createLimiter, delay } from '../src/limit.mjs';
 import { bondingCurve, pumpCreatorVault, sharingConfig } from '../src/pda.mjs';
 import { packBatches, workItems } from '../src/claim.mjs';
 
@@ -168,7 +168,7 @@ test('the shareholder sweep queries every slot through the supplied limiter', as
       inFlight++;
       peak = Math.max(peak, inFlight);
       offsets.push(filters[1].memcmp.offset);
-      await new Promise((r) => setTimeout(r, 3));
+      await delay(3);
       inFlight--;
       return [];
     },

@@ -25,9 +25,10 @@
     "claim": "node bin/harvest.mjs claim",
     "dashboard": "node bin/harvest.mjs dashboard",
     "test": "node --test",
-    "verify:onchain": "node scripts/verify-onchain.mjs",
     "test:browser": "node --test test/browser.test.mjs",
-    "browsers:install": "playwright-core install firefox webkit"
+    "lint": "eslint .",
+    "browsers:install": "playwright-core install firefox webkit",
+    "verify:onchain": "node scripts/verify-onchain.mjs"
   },
   "keywords": [
     "solana",
@@ -46,6 +47,9 @@
     "@solana/web3.js": "^1.98.0"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-plugin-html": "^8.1.4",
+    "globals": "^17.11.0",
     "jsdom": "^25.0.1",
     "playwright-core": "1.49"
   }
