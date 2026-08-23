@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, for the on-chain check: the constants are read from deployed
+    # programs, so a program upgrade is something to hear about.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests · node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Playwright's Firefox and WebKit builds are ~105MB and change only with
+      # the playwright-core version, so they are worth caching.
+      - name: Cache browsers
+        id: browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install browsers
+        run: npx playwright-core install --with-deps chromium firefox webkit
+
+      # The suite skips rather than fails when a browser is missing, so a
+      # broken install would otherwise pass quietly. One run, then insist
+      # nothing was skipped.
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt
+          skipped=$(grep -E '^# skipped' test-output.txt | awk '{print $3}')
+          echo "skipped: ${skipped:-unknown}"
+          if [ "${skipped:-1}" != "0" ]; then
+            echo "::error::${skipped} test(s) skipped - browser coverage did not run"
+            exit 1
+          fi
+
+  windows:
+    name: tests · windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # No browsers here: this job is about path and platform handling, which
+      # is where this project has actually been bitten before.
+      - name: Test
+        run: npm test
+        env:
+          NO_BROWSER_TESTS: '1'
+
+  onchain:
+    name: on-chain constants
+    runs-on: ubuntu-latest
+    # Hits a public RPC, so it is kept off the push path where rate limiting
+    # would show up as a broken build rather than as news.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Re-derive every constant from the deployed programs
+        run: npm run verify:onchain
+
+  attribution:
+    name: no AI attribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit messages
+        run: |
+          pattern='co-authored-by:.*(claude|cursor|copilot|codex|devin|aider|gemini|chatgpt|openai|anthropic)|generated with.*(claude|cursor|copilot)'
+          if git log --pretty=%B | grep -inE "$pattern"; then
+            echo "::error::AI attribution found in a commit message"
+            exit 1
+          fi
+          echo "clean: no AI attribution across $(git rev-list --count HEAD) commits"

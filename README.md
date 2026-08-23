@@ -7,6 +7,7 @@
 Finds the fees scattered across your dev wallets, tells you exactly what is claimable,<br>
 and drains them in batched transactions instead of one transaction per wallet.
 
+[![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Tests](https://img.shields.io/badge/tests-150%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
@@ -306,6 +307,8 @@ The dashboard is covered at two levels, both against `web/index.html` exactly as
 - **`test/browser.test.mjs`** runs it in real engines through Playwright, for what jsdom has no answer for: horizontal overflow, whether the toolbar wraps, whether the dark and light palettes apply, whether the selection highlight actually paints, and whether the disclosure works from the keyboard alone.
 
 Those fourteen browser tests run **per engine**. Chromium uses whatever branded browser is already installed and downloads nothing; Firefox and WebKit have no system equivalent Playwright can drive, so they run once `npm run browsers:install` has fetched them. Any engine that is missing skips rather than fails, and the skips are reported per test so absent coverage is visible rather than silent. `BROWSER_ENGINES=chromium` narrows the run; `NO_BROWSER_TESTS=1` turns them off.
+
+CI runs the whole suite on Node 20 and 22 with all three engines installed, and separately on Windows for path handling. It fails if any test *skips*, since a browser that failed to install would otherwise pass quietly. A weekly job re-derives every on-chain constant from the deployed programs, so a program upgrade shows up as a build failure rather than as a wrong number.
 
 Every bug in this list reached the published README before a test did, and each one now fails the suite if reintroduced: "hide empty" swallowing sharing rows, an expand/collapse that was documented but never built, and a toolbar that wrapped at narrower widths.
 

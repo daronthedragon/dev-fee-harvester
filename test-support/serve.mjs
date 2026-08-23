@@ -10,7 +10,7 @@ import { TEST_TOKEN } from './fixtures.mjs';
  * API is fake, which keeps the tests hermetic — no RPC, no wallets, no keys.
  */
 export async function serveDashboard({ wallets = [], allowExecute = false, claimResult } = {}) {
-  const html = (await readFile(new URL('../../web/index.html', import.meta.url), 'utf8'))
+  const html = (await readFile(new URL('../web/index.html', import.meta.url), 'utf8'))
     .replace('__TOKEN__', TEST_TOKEN)
     .replace('__ALLOW_EXECUTE__', String(allowExecute));
 

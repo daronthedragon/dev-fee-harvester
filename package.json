@@ -24,7 +24,7 @@
     "scan": "node bin/harvest.mjs scan",
     "claim": "node bin/harvest.mjs claim",
     "dashboard": "node bin/harvest.mjs dashboard",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test",
     "verify:onchain": "node scripts/verify-onchain.mjs",
     "test:browser": "node --test test/browser.test.mjs",
     "browsers:install": "playwright-core install firefox webkit"

@@ -1,8 +1,8 @@
 import { after, describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium, firefox, webkit } from 'playwright-core';
-import { directWallet, emptyWallet, shareWallet } from './helpers/fixtures.mjs';
-import { serveDashboard } from './helpers/serve.mjs';
+import { directWallet, emptyWallet, shareWallet } from '../test-support/fixtures.mjs';
+import { serveDashboard } from '../test-support/serve.mjs';
 
 /**
  * Browser tests for the dashboard, run against every engine available.
