@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-82%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -117,6 +117,8 @@ Two decisions do most of the work.
 **Batches are packed by measurement, not by guesswork.** Every extra signer costs 64 bytes of signature plus 32 of pubkey, and a distribution carries one account per shareholder, so each candidate batch is compiled and its real serialised length checked against Solana's 1232-byte limit before another action is added. In practice that is ~8 actions per transaction: forty wallets settle in five transactions instead of forty.
 
 **Every action is simulated on its own first.** One reverting claim would otherwise fail the whole transaction and nobody gets paid. Anything the chain rejects is dropped from the batch and reported with the program's own explanation.
+
+A rejection and a failed check are held apart. If a simulation cannot be run — a rate limit, a dropped connection — the row is marked `unchecked`, not `blocked`, because "the chain refused this" and "we could not ask" are very different claims to make about someone's money. Unverified work stays out of batches either way.
 
 ## Scale
 
@@ -284,7 +286,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                 # 76 tests, no network required
+npm test                 # 82 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 

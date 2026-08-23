@@ -2,6 +2,7 @@ import { TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { WSOL_MINT } from './constants.mjs';
 import { PROGRAM_ERRORS } from './errors.mjs';
 import { isActionable, workItems } from './claim.mjs';
+import { createLimiter, withRetry } from './limit.mjs';
 
 /** Turn a raw simulation error into something a human can act on. */
 export function explainError(err) {
@@ -32,16 +33,23 @@ export function explainError(err) {
  * Per *item* rather than per wallet: a wallet holding a dozen distributions
  * cannot simulate them in one transaction, and judging the wallet as a whole
  * would wrongly condemn work that is perfectly valid on its own.
+ *
+ * "The chain rejected this" and "we could not ask the chain" are tracked
+ * separately. Collapsing them means one rate-limited request marks claimable
+ * money as permanently blocked, which is the same silent-loss failure this
+ * pass exists to prevent.
  */
 export async function preflight(connection, rows, payer, options = {}) {
-  const { concurrency = 6, quoteMint = WSOL_MINT, onProgress } = options;
+  const { concurrency = 6, quoteMint = WSOL_MINT, onProgress, limiter } = options;
   const { blockhash } = await connection.getLatestBlockhash();
+  const gate = limiter ?? createLimiter({ concurrency });
 
   // Clone so marking something blocked never mutates the caller's rows.
   const out = rows.map((r) => ({
     ...r,
     distributions: (r.distributions ?? []).map((d) => ({ ...d })),
     directBlocked: null,
+    directUnverified: null,
   }));
 
   const jobs = [];
@@ -50,37 +58,36 @@ export async function preflight(connection, rows, payer, options = {}) {
   }
 
   let done = 0;
-  const queue = [...jobs];
-  const worker = async () => {
-    for (;;) {
-      const job = queue.shift();
-      if (!job) return;
-      const reason = await checkItem(connection, job.item, payer, blockhash);
-      if (reason) {
-        if (job.item.kind === 'claim') job.row.directBlocked = reason;
-        else {
-          const d = job.row.distributions.find((x) => x.mint.equals(job.item.mint));
-          if (d) d.blocked = reason;
-        }
-      }
-      onProgress?.(++done, jobs.length);
+  await Promise.all(jobs.map(({ row, item }) => gate(async () => {
+    const { rejected, unverified } = await checkItem(connection, item, payer, blockhash);
+    if (item.kind === 'claim') {
+      row.directBlocked = rejected;
+      row.directUnverified = unverified;
+    } else {
+      const d = row.distributions.find((x) => x.mint.equals(item.mint));
+      if (d) { d.blocked = rejected; d.unverified = unverified; }
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+    onProgress?.(++done, jobs.length);
+  })));
 
   return out.map((row) => summarise(row));
 }
 
 async function checkItem(connection, item, payer, blockhash) {
+  const tx = new VersionedTransaction(
+    new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: item.instructions })
+      .compileToV0Message(),
+  );
   try {
-    const tx = new VersionedTransaction(
-      new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: item.instructions })
-        .compileToV0Message(),
+    const sim = await withRetry(
+      () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true }),
+      { attempts: 4, baseDelayMs: 400 },
     );
-    const sim = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true });
-    return sim.value.err ? explainError(sim.value.err) : null;
+    return { rejected: sim.value.err ? explainError(sim.value.err) : null, unverified: null };
   } catch (err) {
-    return err.message;
+    // The request never landed. That says nothing about whether the claim
+    // would work, so it must not be recorded as a rejection.
+    return { rejected: null, unverified: `could not verify — ${err.message}` };
   }
 }
 
@@ -91,28 +98,34 @@ function summarise(row) {
   }
 
   const directAttempted = (row.pumpLamports ?? 0) > 0 || (row.pumpswapLamports ?? 0) > 0;
-  const directOk = directAttempted && !row.directBlocked;
+  const directOk = directAttempted && !row.directBlocked && !row.directUnverified;
   const dists = row.distributions ?? [];
-  const okDists = dists.filter((d) => d.distributable > 0 && !d.blocked);
-  const badDists = dists.filter((d) => d.distributable > 0 && d.blocked);
+  const live = dists.filter((d) => d.distributable > 0);
+  const okDists = live.filter((d) => !d.blocked && !d.unverified);
+  const badDists = live.filter((d) => d.blocked);
+  const unsureDists = live.filter((d) => d.unverified);
 
   const verified =
     (directOk ? (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0) : 0) +
     okDists.reduce((n, d) => n + d.distributable, 0);
 
-  // A row still counts as ready if any part of it works; only report it
-  // blocked when nothing at all can proceed.
   const anyOk = directOk || okDists.length > 0;
-  const reasons = [row.directBlocked, ...badDists.map((d) => d.blocked)].filter(Boolean);
+  const rejections = [row.directBlocked, ...badDists.map((d) => d.blocked)].filter(Boolean);
+  const unverified = [row.directUnverified, ...unsureDists.map((d) => d.unverified)].filter(Boolean);
+  const reasons = [...new Set([...rejections, ...unverified])];
 
   // Recompute the user's share from the distributions that survived.
   const sharingLamports = okDists.reduce((n, d) => n + (d.userShare ?? 0), 0);
 
+  // Nothing verified and nothing rejected means the checks themselves failed.
+  const status = anyOk ? 'ready' : (rejections.length > 0 ? 'blocked' : 'unchecked');
+
   return {
     ...row,
-    status: anyOk ? 'ready' : 'blocked',
-    reason: reasons.length > 0 ? [...new Set(reasons)].join(' · ') : null,
+    status,
+    reason: reasons.length > 0 ? reasons.join(' · ') : null,
     partial: anyOk && reasons.length > 0,
+    unverified: unverified.length > 0,
     verifiedLamports: verified,
     sharingLamports,
     totalLamports: (directOk ? (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0) : 0) + sharingLamports,

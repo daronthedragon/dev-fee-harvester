@@ -32,7 +32,7 @@ export function workItems(row, payer, quoteMint = WSOL_MINT) {
     direct.push(createAtaIdempotentIx(payer, row.publicKey, quoteMint));
     direct.push(collectCoinCreatorFeeIx(row.publicKey, quoteMint));
   }
-  if (direct.length > 0 && !row.directBlocked) {
+  if (direct.length > 0 && !row.directBlocked && !row.directUnverified) {
     items.push({
       row,
       kind: 'claim',
@@ -50,7 +50,9 @@ export function workItems(row, payer, quoteMint = WSOL_MINT) {
   }
 
   for (const d of row.distributions ?? []) {
-    if (d.distributable <= 0 || d.blocked) continue;
+    // Unverified means the check never landed, so batching it would gamble
+    // the whole transaction on work nothing has confirmed.
+    if (d.distributable <= 0 || d.blocked || d.unverified) continue;
     items.push({
       row,
       kind: 'distribute',
@@ -74,8 +76,8 @@ export const instructionsForWallet = (row, payer, quoteMint = WSOL_MINT) =>
 
 /** What this row actually moves on-chain: direct claims plus any crank. */
 export const movedLamports = (row) =>
-  (row.directBlocked ? 0 : (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0)) +
-  (row.distributions ?? []).reduce((n, d) => n + (d.blocked ? 0 : (d.distributable ?? 0)), 0);
+  ((row.directBlocked || row.directUnverified) ? 0 : (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0)) +
+  (row.distributions ?? []).reduce((n, d) => n + ((d.blocked || d.unverified) ? 0 : (d.distributable ?? 0)), 0);
 
 /** A row is worth acting on if it can be claimed or distributed. */
 export const isActionable = (row) =>

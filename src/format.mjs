@@ -62,7 +62,7 @@ export function statusTag(status) {
   if (status === 'ready') return c.green('ready');
   if (status === 'blocked') return c.red('blocked');
   if (status === 'empty') return c.grey('empty');
-  // With --no-preflight nothing has been simulated, so say that rather than
-  // leaving a blank that reads as "fine".
+  // Either nothing was simulated (--no-preflight) or the checks themselves
+  // could not run. Both are "we do not know", which must not read as "fine".
   return c.yellow(status ?? 'unchecked');
 }

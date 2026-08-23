@@ -170,7 +170,8 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   if (!args['no-preflight']) {
     const withFees = rows.filter(isActionable);
     const checked = await preflight(connection, withFees, payer.publicKey, {
-      onProgress: (n, total) => progress(`preflight ${n}/${total}`),
+      limiter: shareLimiter,
+      onProgress: (n, total) => progress(`preflight ${count(n)}/${count(total)}`),
     });
     clearProgress();
     const byKey = new Map(checked.map((r) => [r.publicKey.toBase58(), r]));
