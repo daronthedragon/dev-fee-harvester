@@ -1,5 +1,6 @@
 import readline from 'node:readline';
 import { c, pad, padStart, sol, statusTag } from './format.mjs';
+import { isActionable, movedLamports } from './claim.mjs';
 
 /**
  * Terminal multi-select. Dependency-free on purpose: this is one screen of
@@ -8,42 +9,47 @@ import { c, pad, padStart, sol, statusTag } from './format.mjs';
  *
  * space toggle · a all · n none · r ready only · enter confirm · q cancel
  */
-export async function multiSelect(rows, { title = 'Select wallets' } = {}) {
-  if (!process.stdin.isTTY) {
+export async function multiSelect(rows, { title = 'Select wallets', out = process.stdout, input = process.stdin } = {}) {
+  if (!input.isTTY) {
     throw new Error('not a TTY — re-run with --all to select every claimable wallet non-interactively');
   }
 
   // Pre-tick everything worth claiming; the common case is "take it all".
-  const selected = rows.map((r) => (r.status ?? 'ready') === 'ready' && r.totalLamports > 0);
+  // A sharing-config row moves real money while its own total reads zero, so
+  // selection asks whether the row is actionable rather than whether this
+  // wallet personally receives anything. Using totalLamports here silently
+  // unticked the largest amounts on the list.
+  const pickable = (r) => (r.status ?? 'ready') === 'ready' && isActionable(r);
+  const selected = rows.map(pickable);
   let cursor = 0;
   const labelWidth = Math.min(24, Math.max(6, ...rows.map((r) => r.label.length)));
 
-  readline.emitKeypressEvents(process.stdin);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
+  readline.emitKeypressEvents(input);
+  input.setRawMode(true);
+  input.resume();
 
   const render = (first) => {
-    if (!first) process.stdout.write(`\x1b[${rows.length + 4}A`);
-    const total = rows.reduce((n, r, i) => n + (selected[i] ? r.totalLamports : 0), 0);
+    if (!first) out.write(`\x1b[${rows.length + 4}A`);
+    const total = rows.reduce((n, r, i) => n + (selected[i] ? movedLamports(r) : 0), 0);
     const count = selected.filter(Boolean).length;
-    process.stdout.write(`\x1b[0J${c.bold(title)}  ${c.dim(`${count}/${rows.length} selected · ${sol(total)} SOL`)}\n`);
-    process.stdout.write(c.grey('space toggle · a all · n none · r ready only · enter confirm · q cancel') + '\n\n');
+    out.write(`\x1b[0J${c.bold(title)}  ${c.dim(`${count}/${rows.length} selected · ${sol(total)} SOL`)}\n`);
+    out.write(c.grey('space toggle · a all · n none · r ready only · enter confirm · q cancel') + '\n\n');
     rows.forEach((r, i) => {
       const here = i === cursor;
       const box = selected[i] ? c.green('[x]') : '[ ]';
-      const line = `${here ? c.cyan('>') : ' '} ${box} ${pad(r.label, labelWidth)} ${c.dim(r.publicKey.toBase58().slice(0, 8) + '…')} ${padStart(sol(r.totalLamports), 12)} SOL  ${statusTag(r.status)}${r.reason ? c.dim(' · ' + r.reason.slice(0, 44)) : ''}`;
-      process.stdout.write(line.slice(0, (process.stdout.columns ?? 120) + 40) + '\n');
+      const line = `${here ? c.cyan('>') : ' '} ${box} ${pad(r.label, labelWidth)} ${c.dim(r.publicKey.toBase58().slice(0, 8) + '…')} ${padStart(sol(movedLamports(r)), 12)} SOL  ${statusTag(r.status)}${r.reason ? c.dim(' · ' + r.reason.slice(0, 44)) : ''}`;
+      out.write(line.slice(0, (out.columns ?? 120) + 40) + '\n');
     });
-    process.stdout.write('\n');
+    out.write('\n');
   };
 
   render(true);
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.stdin.removeListener('keypress', onKey);
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener('keypress', onKey);
     };
 
     function onKey(_str, key) {
@@ -52,7 +58,7 @@ export async function multiSelect(rows, { title = 'Select wallets' } = {}) {
       else if (key.name === 'space') selected[cursor] = !selected[cursor];
       else if (key.name === 'a') selected.fill(true);
       else if (key.name === 'n') selected.fill(false);
-      else if (key.name === 'r') rows.forEach((r, i) => { selected[i] = (r.status ?? 'ready') === 'ready' && r.totalLamports > 0; });
+      else if (key.name === 'r') rows.forEach((r, i) => { selected[i] = pickable(r); });
       else if (key.name === 'return') { cleanup(); return resolve(rows.filter((_, i) => selected[i])); }
       else if (key.name === 'q' || key.name === 'escape' || (key.ctrl && key.name === 'c')) {
         cleanup();
@@ -61,6 +67,6 @@ export async function multiSelect(rows, { title = 'Select wallets' } = {}) {
       render(false);
     }
 
-    process.stdin.on('keypress', onKey);
+    input.on('keypress', onKey);
   });
 }

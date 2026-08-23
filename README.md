@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-58%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-64%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -65,7 +65,13 @@ Then claim:
 node bin/harvest.mjs claim
 ```
 
-That opens a picker — <kbd>space</kbd> toggle, <kbd>a</kbd> all, <kbd>r</kbd> claimable only, <kbd>enter</kbd> confirm. Everything worth claiming is pre-ticked, so the usual answer is just <kbd>enter</kbd>.
+That opens a picker — <kbd>space</kbd> toggle, <kbd>a</kbd> all, <kbd>n</kbd> none, <kbd>r</kbd> claimable only, <kbd>enter</kbd> confirm. Everything worth claiming is pre-ticked, so the usual answer is just <kbd>enter</kbd>.
+
+<div align="center">
+  <img src="assets/picker.gif" width="860" alt="The terminal picker listing four wallets: n clears the selection, the arrow keys move a cursor, space toggles individual rows, a selects all, and r reselects every claimable row, with the running total tracking the selection at 4.036599 SOL">
+</div>
+
+<sub>Real frames from the picker itself, driven by real keystrokes.</sub>
 
 > [!IMPORTANT]
 > **Claiming is a dry run until you pass `--execute`.** Without it every transaction is simulated against mainnet and you are told exactly what would land.
@@ -269,7 +275,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                 # 58 tests, no network required
+npm test                 # 64 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 
