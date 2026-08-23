@@ -13,9 +13,9 @@ and drains them in batched transactions instead of one transaction per wallet.
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
-<img src="assets/demo.svg" width="820" alt="Terminal output listing five developer wallets with their pump.fun, PumpSwap and fee-sharing balances, showing 0.98 SOL claimable and 2.97 SOL releasable by distribution">
+<img src="assets/terminal.gif" width="880" alt="A terminal running harvest claim --all: it lists four wallets with their pump.fun and fee-sharing balances, reports 1.086401 SOL claimable plus 2.968952 SOL releasable by distribution, packs them into one transaction and simulates it for 4.055352 SOL">
 
-<sub>A real run against live mainnet wallets.</sub>
+<sub><code>harvest claim --all</code> against live mainnet wallets — four wallets packed into one transaction, simulated, nothing sent.</sub>
 
 </div>
 
@@ -56,6 +56,8 @@ Look before you leap:
 ```bash
 node bin/harvest.mjs scan
 ```
+
+<img src="assets/demo.svg" width="820" alt="Terminal output listing five developer wallets with their pump.fun, PumpSwap and fee-sharing balances, showing the claimable total and the amount releasable by distribution">
 
 Then claim:
 
@@ -261,6 +263,8 @@ A few details that are easy to get wrong, and are pinned by tests:
 | `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
 | `--no-preflight` | skip the per-action simulation pass |
 | `--json` | machine-readable scan output |
+
+Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags. `FORCE_COLOR=1` keeps colour when output is piped or recorded; `NO_COLOR` always wins.
 
 ## Development
 

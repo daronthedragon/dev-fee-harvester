@@ -120,7 +120,11 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   clearProgress();
   out?.end();
 
-  if (payer === null) die('no wallets found');
+  if (payer === null) {
+    die(requireSigner
+      ? 'no signing wallet available to pay fees — add one, or drop --execute to simulate'
+      : 'no wallets found');
+  }
   if (requireSigner && !canSign(payer)) {
     die(wanted ? `--payer ${wanted} is watch-only and cannot pay fees`
               : 'every wallet is watch-only; at least one signing key is needed to claim');
@@ -226,7 +230,7 @@ async function main() {
   }
 
   if (cmd === 'claim') {
-    const { connection, rows, payer } = await loadAndScan(args, { requireSigner: true });
+    const { connection, rows, payer } = await loadAndScan(args, { requireSigner: Boolean(args.execute) });
     const claimable = rows.filter(isActionable);
     if (claimable.length === 0) { console.log(c.yellow('nothing to claim.')); return; }
 
