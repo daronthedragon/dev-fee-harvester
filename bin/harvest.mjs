@@ -234,8 +234,11 @@ async function main() {
   if (cmd === 'dashboard') {
     const walletsPath = args.wallets ?? process.env.WALLETS ?? './wallets.json';
     const rpc = args.rpc ?? process.env.RPC ?? 'https://api.mainnet-beta.solana.com';
-    await startDashboard({ walletsPath, rpc, port: Number(args.port ?? 4600),
-      allowExecute: Boolean(args.execute), findShares: Boolean(args['find-shares']) });
+    await startDashboard({
+      walletsPath, rpc, port: Number(args.port ?? 4600),
+      allowExecute: Boolean(args.execute), findShares: Boolean(args['find-shares']),
+      concurrency: Number(args.concurrency ?? 8), rpcDelayMs: Number(args['rpc-delay'] ?? 0),
+    });
     return;
   }
 

@@ -45,6 +45,12 @@
   tr.sub td { border-bottom: 1px solid var(--line); }
   .subcell { font-size: 12px; color: var(--muted); white-space: normal; padding-left: 18px; }
   .gain { color: var(--green); margin-left: 6px; }
+  .disc { background: none; border: 0; padding: 2px 4px; margin: 0; color: var(--muted);
+          font: inherit; font-size: 12px; cursor: pointer; border-radius: 4px; }
+  .disc:hover { color: var(--fg); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .disc b { color: var(--fg); }
+  .caret { display: inline-block; width: 11px; color: var(--accent); }
+  .subcell.indent { padding-left: 40px; }
   .scanfail { display: block; color: var(--red); margin-top: 3px; }
   .reason { color: var(--muted); font-size: 11px; white-space: normal; max-width: 320px; }
   input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
@@ -96,6 +102,8 @@ const TOKEN = '__TOKEN__';
 const ALLOW_EXECUTE = __ALLOW_EXECUTE__;
 const sol = (l) => (l / 1e9).toFixed(6);
 let wallets = [], selected = new Set();
+// Which wallets have their share list open. Collapsed is the default.
+const expanded = new Set();
 
 const api = async (path, opts = {}) => {
   const res = await fetch(path, { ...opts, headers: { 'x-token': TOKEN, 'content-type': 'application/json' } });
@@ -137,19 +145,43 @@ function render() {
 
     // Distributions move money out of a shared vault and split it by basis
     // points, so what moves and what this wallet receives are different sums.
-    for (const d of w.distributions ?? []) {
-      const sub = document.createElement('tr');
-      sub.className = 'sub' + (d.blocked ? ' blocked' : '');
-      const what = d.blocked
-        ? `<span class="reason">${d.blocked}</span>`
-        : d.distributable > 0
-          ? `crank <b>${sol(d.distributable)}</b> SOL to ${d.shareholders} shareholder${d.shareholders === 1 ? '' : 's'}`
-          : '<span class="reason">cranked by another row</span>';
-      sub.innerHTML = `<td></td><td colspan="7" class="subcell">
-        └ ${d.kind === 'self' ? 'sharing config' : 'share in'}
-        <span class="addr">${d.mint.slice(0, 10)}…</span> · ${what}
-        ${d.userShare > 0 ? `<span class="gain">→ you receive ${sol(d.userShare)} SOL</span>` : ''}</td>`;
-      tbody.appendChild(sub);
+    // They collapse by default: one wallet can hold a dozen or more shares,
+    // which would otherwise bury every other wallet in the table.
+    const dists = w.distributions ?? [];
+    if (dists.length > 0) {
+      const open = expanded.has(w.address);
+      const moves = dists.reduce((n, d) => n + d.distributable, 0);
+      const toggle = document.createElement('tr');
+      toggle.className = 'sub';
+      toggle.innerHTML = `<td></td><td colspan="7" class="subcell">
+        <button class="disc" aria-expanded="${open}">
+          <span class="caret">${open ? '▾' : '▸'}</span>
+          ${dists.length} ${dists.length === 1 ? 'share' : 'shares'} · releases <b>${sol(moves)}</b> SOL
+        </button></td>`;
+      toggle.querySelector('button').addEventListener('click', () => {
+        open ? expanded.delete(w.address) : expanded.add(w.address);
+        render();
+      });
+      tbody.appendChild(toggle);
+
+      if (open) {
+        for (const d of dists) {
+          const sub = document.createElement('tr');
+          sub.className = 'sub' + (d.blocked || d.unverified ? ' blocked' : '');
+          const what = d.blocked
+            ? `<span class="reason">${d.blocked}</span>`
+            : d.unverified
+              ? `<span class="reason">${d.unverified}</span>`
+              : d.distributable > 0
+                ? `crank <b>${sol(d.distributable)}</b> SOL to ${d.shareholders} shareholder${d.shareholders === 1 ? '' : 's'}`
+                : '<span class="reason">cranked by another row</span>';
+          sub.innerHTML = `<td></td><td colspan="7" class="subcell indent">
+            └ ${d.kind === 'self' ? 'sharing config' : 'share in'}
+            <span class="addr">${d.mint.slice(0, 10)}…</span> · ${what}
+            ${d.userShare > 0 ? `<span class="gain">→ you receive ${sol(d.userShare)} SOL</span>` : ''}</td>`;
+          tbody.appendChild(sub);
+        }
+      }
     }
   }
   const chosen = wallets.filter(w => selected.has(w.address));

@@ -92,7 +92,15 @@ node bin/harvest.mjs dashboard
 
 <sub>A real run: selecting four wallets and simulating the claim against mainnet — one transaction, four actions, 4.037043 SOL.</sub>
 
-The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan. Sharing-config rows expand to show what the crank releases and how much of it reaches you.
+The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan.
+
+Shares collapse behind a disclosure, because a single wallet can hold a dozen or more and would otherwise bury every other row. Opening one shows each config: what the crank releases, and how much of it reaches you.
+
+<div align="center">
+  <img src="assets/expand.gif" width="900" alt="A dashboard row summarising fourteen shares that release 4.951359 SOL; clicking it expands into one line per config, each showing the mint, what the crank releases, how many shareholders split it and what this wallet receives, then collapses again">
+</div>
+
+<sub>One wallet, fourteen shares in other creators' configs.</sub>
 
 **Simulating needs no private key.** A dry run is simulated with signature verification disabled, so previewing what a claim would do works on watch-only pubkeys — you can see exactly what would land before the tool goes anywhere near a secret. Sending, of course, still requires every real signature.
 

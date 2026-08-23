@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { claimAll, isActionable } from './claim.mjs';
+import { createLimiter } from './limit.mjs';
 import { c, sol } from './format.mjs';
 import { canSign, loadWallets } from './keys.mjs';
 import { preflight } from './preflight.mjs';
@@ -17,7 +18,10 @@ import { attachDistributions } from './sharing.mjs';
  * page in the browser (or another process on the box) from driving a claim
  * just because the port happens to be open.
  */
-export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecute = false, findShares = false }) {
+export async function startDashboard({
+  walletsPath, rpc, port = 4600, allowExecute = false, findShares = false,
+  concurrency = 8, rpcDelayMs = 0,
+}) {
   const token = randomBytes(24).toString('hex');
   const connection = new Connection(rpc, {
     commitment: 'confirmed',
@@ -27,6 +31,9 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
     disableRetryOnRateLimit: true,
   });
   const wallets = await loadWallets(walletsPath);
+  // The shareholder sweep and preflight are the heaviest requests here, and
+  // unpaced they simply 429 out on a public endpoint. Same pacing as the CLI.
+  const limiter = createLimiter({ concurrency, minDelayMs: rpcDelayMs });
   const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
 
   let cache = [];
@@ -62,6 +69,7 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
       if (url.pathname === '/api/scan') {
         const scanned = await attachDistributions(connection, await scanWallets(connection, wallets), {
           findShares: findShares || url.searchParams.get('shares') === '1',
+          limiter,
         });
         // Same rule as the CLI: richest signer pays; a watch-only set still
         // scans, it just cannot claim.
@@ -70,7 +78,7 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
         const payer = signers[0] ?? [...scanned].sort(byBalance)[0];
         if (!payer) return json(res, 400, { error: 'no wallets loaded' });
         const withFees = scanned.filter(isActionable);
-        const checked = await preflight(connection, withFees, payer.publicKey);
+        const checked = await preflight(connection, withFees, payer.publicKey, { limiter });
         const byKey = new Map(checked.map((r) => [r.publicKey.toBase58(), r]));
         cache = scanned.map((r) => byKey.get(r.publicKey.toBase58()) ?? { ...r, status: 'empty', reason: 'nothing to claim' });
         return json(res, 200, {
@@ -95,6 +103,7 @@ export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecu
               userShare: d.userShare,
               shareholders: d.config.shareholders.length,
               blocked: d.blocked ?? null,
+              unverified: d.unverified ?? null,
             })),
           })),
         });
