@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-64%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -119,6 +119,14 @@ Two decisions do most of the work.
 **Every action is simulated on its own first.** One reverting claim would otherwise fail the whole transaction and nobody gets paid. Anything the chain rejects is dropped from the batch and reported with the program's own explanation.
 
 ## Scale
+
+The wallet list is streamed, and the counter tells you how far along it is and how much it has found so far:
+
+<div align="center">
+  <img src="assets/scan.gif" width="880" alt="A terminal running harvest scan over a 3,000-wallet JSONL file: a status line counts up through the wallets in place, reporting how many have fees, then prints the finished table of the three funded wallets it found">
+</div>
+
+<sub>Three thousand wallets streamed past; the three holding fees are what remains at the end.</sub>
 
 There is no wallet count at which this falls over. Measured on a 500,000-wallet file:
 
@@ -264,6 +272,7 @@ A few details that are easy to get wrong, and are pinned by tests:
 | `--concurrency <n>` | parallel RPC requests (default 8) |
 | `--workers <n>` | threads for address derivation (default cores−1, max 8; `0` disables) |
 | `--rpc-delay <ms>` | minimum gap between RPC requests, for strict rate limits |
+| `--progress <mode>` | `auto` (default), `always`, or `never` — the status line while scanning |
 | `--out <file.jsonl>` | append every funded wallet as it is found |
 | `--find-shares` | also hunt fees held for you in team sharing configs |
 | `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
@@ -275,7 +284,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                 # 64 tests, no network required
+npm test                 # 70 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 

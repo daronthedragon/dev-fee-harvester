@@ -30,15 +30,29 @@ export const padStart = (s, n) => String(s).padStart(n);
 /**
  * Redraw a single status line in place, and clear it when finished.
  *
- * Silent when stderr is not a terminal: carriage-return overwriting only makes
- * sense on a live terminal, and piping it into a file or a capture leaves a
- * trail of half-overwritten counters instead of one tidy line.
+ * Default is `auto`: silent unless stderr is a terminal, because
+ * carriage-return overwriting only makes sense on a live one — piped into a
+ * file it leaves a trail of half-overwritten counters. `always` is for the
+ * cases where you want it anyway, such as recording a session or watching a
+ * long run through a pipe; `never` silences it outright.
  */
+let progressMode = 'auto';
+
+export function setProgressMode(mode) {
+  if (!['auto', 'always', 'never'].includes(mode)) {
+    throw new Error(`--progress must be auto, always or never (got ${JSON.stringify(mode)})`);
+  }
+  progressMode = mode;
+}
+
+const progressEnabled = () =>
+  progressMode === 'always' || (progressMode === 'auto' && Boolean(process.stderr.isTTY));
+
 export const progress = (text) => {
-  if (process.stderr.isTTY) process.stderr.write(`\r${c.dim(text)}\x1b[K`);
+  if (progressEnabled()) process.stderr.write(`\r${c.dim(text)}\x1b[K`);
 };
 export const clearProgress = () => {
-  if (process.stderr.isTTY) process.stderr.write('\r\x1b[K');
+  if (progressEnabled()) process.stderr.write('\r\x1b[K');
 };
 
 /** Compact counts for long runs: 1234567 -> 1,234,567 */

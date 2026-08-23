@@ -5,7 +5,7 @@ import { LAMPORTS_PER_SOL } from '../src/constants.mjs';
 import { BagsClient, claimBags, scanBags } from '../src/bags.mjs';
 import { claimAll, isActionable, movedLamports } from '../src/claim.mjs';
 import { createWriteStream } from 'node:fs';
-import { c, clearProgress, count, pad, padStart, progress, sol, statusTag } from '../src/format.mjs';
+import { c, clearProgress, count, pad, padStart, progress, setProgressMode, sol, statusTag } from '../src/format.mjs';
 import { canSign, streamWallets } from '../src/keys.mjs';
 import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
@@ -40,6 +40,7 @@ ${c.bold('Options')}
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
                        note: authenticated responses are not yet confirmed live
   --port <n>           dashboard port (default 4600)
+  --progress <mode>    auto (default), always, or never — status line while scanning
   --json               machine-readable output for scan
 
 ${c.dim('Claiming is a dry run unless you pass --execute.')}
@@ -206,6 +207,10 @@ function printTable(rows) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0] ?? 'help';
+
+  if (args.progress !== undefined) {
+    try { setProgressMode(String(args.progress)); } catch (e) { die(e.message); }
+  }
 
   if (cmd === 'help' || args.help) { console.log(HELP); return; }
 
