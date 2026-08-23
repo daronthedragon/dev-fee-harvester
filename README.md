@@ -307,6 +307,26 @@ npm run format              # apply it
 npm run verify:onchain      # re-derive every constant from the on-chain IDLs
 ```
 
+### Pre-commit hook
+
+`.githooks/pre-commit` formats staged files, re-stages them, and lints them. It skips quietly if `node_modules` is missing, and a file that is staged only in part is reported rather than rewritten — formatting and re-adding it would sweep the unstaged half into the commit.
+
+```bash
+git config core.hooksPath .githooks
+```
+
+> [!WARNING]
+> If you already set `core.hooksPath` globally, do **not** run that — it points Git away from your global hooks for this repo and silently switches them off. Add a dispatcher to your global hook instead:
+>
+> ```sh
+> # ~/.githooks/pre-commit
+> top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+> [ -f "$top/.githooks/pre-commit" ] && exec sh "$top/.githooks/pre-commit"
+> exit 0
+> ```
+>
+> For the same reason this repo does not use husky: husky sets `core.hooksPath` per repo, which would disable any global hooks you rely on.
+
 The dashboard is covered at two levels, both against `web/index.html` exactly as the server serves it — same file, same placeholders — with only the API stubbed.
 
 - **`test/dashboard.test.mjs`** runs the page in jsdom and drives the real script: rendering, filtering, the share disclosure, selection, what Simulate posts, the execute guard.
