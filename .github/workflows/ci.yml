@@ -119,7 +119,7 @@ jobs:
           fi
 
   lint:
-    name: lint
+    name: lint & format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -129,6 +129,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
 
   onchain:
     name: on-chain constants

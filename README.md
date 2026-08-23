@@ -302,6 +302,8 @@ npm test                    # 150 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script
+npm run format:check        # prettier, verified in CI
+npm run format              # apply it
 npm run verify:onchain      # re-derive every constant from the on-chain IDLs
 ```
 
