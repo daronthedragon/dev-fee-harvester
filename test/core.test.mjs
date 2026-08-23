@@ -4,8 +4,12 @@ import { createHash } from 'node:crypto';
 import { Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 
 import {
-  DISCRIMINATORS, PUMPSWAP_PROGRAM, PUMP_PROGRAM,
-  SEED_PUMPSWAP_CREATOR_VAULT, SEED_PUMP_CREATOR_VAULT, SYSTEM_ACCOUNT_RENT_LAMPORTS,
+  DISCRIMINATORS,
+  PUMPSWAP_PROGRAM,
+  PUMP_PROGRAM,
+  SEED_PUMPSWAP_CREATOR_VAULT,
+  SEED_PUMP_CREATOR_VAULT,
+  SYSTEM_ACCOUNT_RENT_LAMPORTS,
 } from '../src/constants.mjs';
 import { eventAuthority, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx } from '../src/ix.mjs';
@@ -32,13 +36,15 @@ test('the two programs use differently spelled vault seeds', () => {
 });
 
 test('discriminators equal sha256("global:<name>")[0..8]', () => {
-  const d = (n) => Uint8Array.from(createHash('sha256').update(`global:${n}`).digest().subarray(0, 8));
+  const d = (n) =>
+    Uint8Array.from(createHash('sha256').update(`global:${n}`).digest().subarray(0, 8));
   assert.deepEqual(DISCRIMINATORS.collect_creator_fee, d('collect_creator_fee'));
   assert.deepEqual(DISCRIMINATORS.collect_coin_creator_fee, d('collect_coin_creator_fee'));
 });
 
 test('event authority uses the __event_authority seed per program', () => {
-  const expected = (p) => PublicKey.findProgramAddressSync([Buffer.from('__event_authority')], p)[0].toBase58();
+  const expected = (p) =>
+    PublicKey.findProgramAddressSync([Buffer.from('__event_authority')], p)[0].toBase58();
   assert.equal(eventAuthority(PUMP_PROGRAM).toBase58(), expected(PUMP_PROGRAM));
   assert.equal(eventAuthority(PUMPSWAP_PROGRAM).toBase58(), expected(PUMPSWAP_PROGRAM));
 });
@@ -74,8 +80,13 @@ test('a PumpSwap claim prepends an idempotent ATA create', () => {
 });
 
 const rowFor = (kp, lamports = 1e8) => ({
-  publicKey: kp.publicKey, label: kp.publicKey.toBase58().slice(0, 4), secretKey: kp.secretKey,
-  pumpLamports: lamports, pumpswapLamports: 0, totalLamports: lamports, status: 'ready',
+  publicKey: kp.publicKey,
+  label: kp.publicKey.toBase58().slice(0, 4),
+  secretKey: kp.secretKey,
+  pumpLamports: lamports,
+  pumpswapLamports: 0,
+  totalLamports: lamports,
+  status: 'ready',
 });
 
 const BLOCKHASH = '11111111111111111111111111111111';
@@ -88,12 +99,20 @@ test('packBatches keeps every transaction under the 1232-byte cap', () => {
   const batches = packBatches(items, payer, { blockhash: BLOCKHASH, maxPerTx: 64 });
   assert.ok(batches.length > 1, 'thirty wallets cannot fit in one transaction');
   for (const b of batches) {
-    const tx = new VersionedTransaction(new TransactionMessage({
-      payerKey: payer, recentBlockhash: BLOCKHASH, instructions: b.instructions,
-    }).compileToV0Message());
+    const tx = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: payer,
+        recentBlockhash: BLOCKHASH,
+        instructions: b.instructions,
+      }).compileToV0Message(),
+    );
     assert.ok(tx.serialize().length <= 1232, `batch of ${b.items.length} exceeded the cap`);
   }
-  assert.equal(batches.reduce((n, b) => n + b.items.length, 0), items.length, 'no work dropped');
+  assert.equal(
+    batches.reduce((n, b) => n + b.items.length, 0),
+    items.length,
+    'no work dropped',
+  );
 });
 
 test('packBatches honours maxPerTx', () => {
@@ -142,12 +161,21 @@ test('a dry run needs no signing key at all', async () => {
   // sigVerify disabled, so an unsigned transaction is a valid question to ask.
   const watchOnly = { publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null };
   const row = {
-    ...watchOnly, pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready',
+    ...watchOnly,
+    pumpLamports: 1e8,
+    pumpswapLamports: 0,
+    totalLamports: 1e8,
+    status: 'ready',
   };
   let simulated = 0;
   const connection = {
-    async getLatestBlockhash() { return { blockhash: BLOCKHASH, lastValidBlockHeight: 1 }; },
-    async simulateTransaction() { simulated++; return { value: { err: null, logs: [] } }; },
+    async getLatestBlockhash() {
+      return { blockhash: BLOCKHASH, lastValidBlockHeight: 1 };
+    },
+    async simulateTransaction() {
+      simulated++;
+      return { value: { err: null, logs: [] } };
+    },
   };
 
   const results = await claimAll(connection, [row], watchOnly, { dryRun: true });
@@ -158,7 +186,13 @@ test('a dry run needs no signing key at all', async () => {
 
 test('sending still refuses a watch-only fee payer', async () => {
   const watchOnly = { publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null };
-  const row = { ...watchOnly, pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready' };
+  const row = {
+    ...watchOnly,
+    pumpLamports: 1e8,
+    pumpswapLamports: 0,
+    totalLamports: 1e8,
+    status: 'ready',
+  };
   await assert.rejects(
     () => claimAll({}, [row], watchOnly, { dryRun: false }),
     /fee payer must be a wallet with a signing key/,
@@ -169,8 +203,13 @@ test('sending refuses a watch-only claimant even when the payer can sign', async
   const payerKp = Keypair.generate();
   const payer = { publicKey: payerKp.publicKey, label: 'payer', secretKey: payerKp.secretKey };
   const watchRow = {
-    publicKey: Keypair.generate().publicKey, label: 'watch', secretKey: null,
-    pumpLamports: 1e8, pumpswapLamports: 0, totalLamports: 1e8, status: 'ready',
+    publicKey: Keypair.generate().publicKey,
+    label: 'watch',
+    secretKey: null,
+    pumpLamports: 1e8,
+    pumpswapLamports: 0,
+    totalLamports: 1e8,
+    status: 'ready',
   };
   await assert.rejects(
     () => claimAll({}, [watchRow], payer, { dryRun: false }),

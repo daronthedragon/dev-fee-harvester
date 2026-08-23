@@ -40,7 +40,9 @@ function buildRow(wallet, vaultInfo, ataInfo, selfInfo) {
   // An address in a wallet list is occasionally not a wallet at all but a
   // sharing config PDA, because that is what a migrated bonding curve names
   // as its creator. Detect it here so the claim path never tries to sign.
-  const selfConfig = isSharingConfig(selfInfo) ? decodeSharingConfig(wallet.publicKey, selfInfo.data) : null;
+  const selfConfig = isSharingConfig(selfInfo)
+    ? decodeSharingConfig(wallet.publicKey, selfInfo.data)
+    : null;
   return {
     ...wallet,
     pumpLamports: selfConfig ? 0 : pump,
@@ -61,9 +63,9 @@ function buildRow(wallet, vaultInfo, ataInfo, selfInfo) {
  * precisely the wallets the shareholder sweep exists to find.
  */
 const hasFees = (row) =>
-  row.totalLamports > 0
-  || row.selfConfigDistributable > 0
-  || (row.distributions ?? []).some((d) => d.distributable > 0);
+  row.totalLamports > 0 ||
+  row.selfConfigDistributable > 0 ||
+  (row.distributions ?? []).some((d) => d.distributable > 0);
 
 /**
  * Scan one batch of wallets, issuing its account lookups concurrently.
@@ -75,8 +77,11 @@ async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, poo
     chunks.push(addresses.slice(i, i + RPC_ACCOUNT_CHUNK));
   }
 
-  const results = await Promise.all(chunks.map((chunk) =>
-    limiter(() => withRetry(() => connection.getMultipleAccountsInfo(chunk), { onRetry }))));
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      limiter(() => withRetry(() => connection.getMultipleAccountsInfo(chunk), { onRetry })),
+    ),
+  );
 
   const infos = results.flat();
   return wallets.map((w, i) => buildRow(w, infos[i * 3], infos[i * 3 + 1], infos[i * 3 + 2]));
@@ -123,29 +128,29 @@ export async function* scanStream(walletBatches, connection, options = {}) {
   const seen = new Set();
 
   try {
-  for await (const wallets of walletBatches) {
-    let rows = await scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool });
-    // Enrichment runs before the filter, and per batch, so work that depends
-    // on a wallet having no balance of its own still sees it — while memory
-    // stays bounded to one batch.
-    if (enrich) rows = await enrich(rows);
-    scanned += wallets.length;
-    const kept = [];
-    for (const row of rows) {
-      // Every row is offered to the caller before filtering, so things that
-      // depend on wallets without fees — picking a fee payer, above all — can
-      // be decided without retaining the whole set.
-      onRow?.(row);
-      if (!keepEmpty && !hasFees(row)) continue;
-      const key = row.publicKey.toBase58();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      kept.push(row);
+    for await (const wallets of walletBatches) {
+      let rows = await scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool });
+      // Enrichment runs before the filter, and per batch, so work that depends
+      // on a wallet having no balance of its own still sees it — while memory
+      // stays bounded to one batch.
+      if (enrich) rows = await enrich(rows);
+      scanned += wallets.length;
+      const kept = [];
+      for (const row of rows) {
+        // Every row is offered to the caller before filtering, so things that
+        // depend on wallets without fees — picking a fee payer, above all — can
+        // be decided without retaining the whole set.
+        onRow?.(row);
+        if (!keepEmpty && !hasFees(row)) continue;
+        const key = row.publicKey.toBase58();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        kept.push(row);
+      }
+      found += kept.length;
+      onProgress?.(scanned, found);
+      if (kept.length > 0) yield kept;
     }
-    found += kept.length;
-    onProgress?.(scanned, found);
-    if (kept.length > 0) yield kept;
-  }
   } finally {
     if (ownsPool) await pool.close();
   }

@@ -48,7 +48,10 @@ export function bondingCurve(mint) {
 
 /** Sharing config for a mint. Lives under pump_fees, not pump.fun. */
 export function sharingConfig(mint) {
-  return PublicKey.findProgramAddressSync([SEED_SHARING_CONFIG, mint.toBuffer()], PUMP_FEES_PROGRAM)[0];
+  return PublicKey.findProgramAddressSync(
+    [SEED_SHARING_CONFIG, mint.toBuffer()],
+    PUMP_FEES_PROGRAM,
+  )[0];
 }
 
 /** Anchor's self-CPI event authority, seed "__event_authority". */

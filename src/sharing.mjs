@@ -35,14 +35,18 @@ const SHAREHOLDERS_OFFSET = 80;
 const MINT_OFFSET = 11;
 
 /** How many shareholder slots can physically fit in the fixed-size account. */
-export const SHAREHOLDER_SLOTS = Math.floor((SHARING_CONFIG_SIZE - SHAREHOLDERS_OFFSET) / SHAREHOLDER_SIZE);
+export const SHAREHOLDER_SLOTS = Math.floor(
+  (SHARING_CONFIG_SIZE - SHAREHOLDERS_OFFSET) / SHAREHOLDER_SIZE,
+);
 
 /** True when this account really is a SharingConfig owned by pump_fees. */
 export function isSharingConfig(info) {
-  return Boolean(info)
-    && info.owner.equals(PUMP_FEES_PROGRAM)
-    && info.data.length >= SHAREHOLDERS_OFFSET + 4
-    && info.data.subarray(0, 8).equals(Buffer.from(SHARING_CONFIG_DISCRIMINATOR));
+  return (
+    Boolean(info) &&
+    info.owner.equals(PUMP_FEES_PROGRAM) &&
+    info.data.length >= SHAREHOLDERS_OFFSET + 4 &&
+    info.data.subarray(0, 8).equals(Buffer.from(SHARING_CONFIG_DISCRIMINATOR))
+  );
 }
 
 export function decodeSharingConfig(address, data) {
@@ -51,7 +55,10 @@ export function decodeSharingConfig(address, data) {
   for (let i = 0; i < count; i++) {
     const o = SHAREHOLDERS_OFFSET + i * SHAREHOLDER_SIZE;
     if (o + SHAREHOLDER_SIZE > data.length) break;
-    shareholders.push({ address: new PublicKey(data.subarray(o, o + 32)), bps: data.readUInt16LE(o + 32) });
+    shareholders.push({
+      address: new PublicKey(data.subarray(o, o + 32)),
+      bps: data.readUInt16LE(o + 32),
+    });
   }
   return {
     address: new PublicKey(address),
@@ -90,7 +97,9 @@ export function distributeCreatorFeesIx(config) {
 
 /** How much is actually releasable from a config's vault right now. */
 export function distributableLamports(vaultLamports) {
-  return vaultLamports > SYSTEM_ACCOUNT_RENT_LAMPORTS ? vaultLamports - SYSTEM_ACCOUNT_RENT_LAMPORTS : 0;
+  return vaultLamports > SYSTEM_ACCOUNT_RENT_LAMPORTS
+    ? vaultLamports - SYSTEM_ACCOUNT_RENT_LAMPORTS
+    : 0;
 }
 
 /** A wallet's cut of a distribution, by basis points. */
@@ -112,7 +121,13 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
   // These are the heaviest requests the tool makes and public endpoints
   // throttle them hard, so the sweep is deliberately more patient than the
   // account lookups: six attempts backing off from half a second.
-  const { slots = SHAREHOLDER_SLOTS, concurrency = 6, attempts = 6, baseDelayMs = 500, limiter } = options;
+  const {
+    slots = SHAREHOLDER_SLOTS,
+    concurrency = 6,
+    attempts = 6,
+    baseDelayMs = 500,
+    limiter,
+  } = options;
   const discFilter = { memcmp: { offset: 0, bytes: encodeBase58(SHARING_CONFIG_DISCRIMINATOR) } };
 
   const querySlot = async (i) => {
@@ -121,7 +136,15 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
       try {
         return await connection.getProgramAccounts(PUMP_FEES_PROGRAM, {
           commitment: 'confirmed',
-          filters: [discFilter, { memcmp: { offset: SHAREHOLDERS_OFFSET + i * SHAREHOLDER_SIZE, bytes: wallet.toBase58() } }],
+          filters: [
+            discFilter,
+            {
+              memcmp: {
+                offset: SHAREHOLDERS_OFFSET + i * SHAREHOLDER_SIZE,
+                bytes: wallet.toBase58(),
+              },
+            },
+          ],
         });
       } catch (err) {
         lastError = err;
@@ -130,7 +153,9 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
     }
     // Never swallow this. A rate-limited slot that quietly returns nothing
     // reads as "no fees here", which is the one wrong answer that costs money.
-    throw new Error(`shareholder slot ${i} failed after ${attempts} attempts: ${lastError?.message ?? 'unknown'}`);
+    throw new Error(
+      `shareholder slot ${i} failed after ${attempts} attempts: ${lastError?.message ?? 'unknown'}`,
+    );
   };
 
   // Bounded concurrency: firing all 27 slots at once is what provokes the
@@ -155,7 +180,7 @@ async function withVaultBalances(connection, configs) {
   const vaults = configs.map((cfg) => pumpCreatorVault(cfg.address));
   const infos = [];
   for (let i = 0; i < vaults.length; i += 100) {
-    infos.push(...await connection.getMultipleAccountsInfo(vaults.slice(i, i + 100)));
+    infos.push(...(await connection.getMultipleAccountsInfo(vaults.slice(i, i + 100))));
   }
   return configs.map((cfg, i) => ({
     ...cfg,
@@ -180,7 +205,11 @@ async function withVaultBalances(connection, configs) {
  * Shareholder discovery costs one filtered request per shareholder slot, so it
  * stays behind a flag rather than being paid for on every scan.
  */
-export async function attachDistributions(connection, rows, { findShares = false, concurrency = 2, onProgress, limiter } = {}) {
+export async function attachDistributions(
+  connection,
+  rows,
+  { findShares = false, concurrency = 2, onProgress, limiter } = {},
+) {
   const out = rows.map((r) => ({ ...r, distributions: [], sharingLamports: 0 }));
 
   // Two wallets can be shareholders of one config. Emitting the crank twice in

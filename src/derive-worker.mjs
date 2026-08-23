@@ -1,8 +1,12 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { PublicKey } from '@solana/web3.js';
 import {
-  ASSOCIATED_TOKEN_PROGRAM, PUMPSWAP_PROGRAM, PUMP_PROGRAM,
-  SEED_PUMPSWAP_CREATOR_VAULT, SEED_PUMP_CREATOR_VAULT, TOKEN_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  PUMPSWAP_PROGRAM,
+  PUMP_PROGRAM,
+  SEED_PUMPSWAP_CREATOR_VAULT,
+  SEED_PUMP_CREATOR_VAULT,
+  TOKEN_PROGRAM,
 } from './constants.mjs';
 
 /**
@@ -24,11 +28,17 @@ function derive(walletBytes) {
   const walletBuf = wallet.toBuffer();
 
   const [vault] = PublicKey.findProgramAddressSync(
-    [SEED_PUMP_CREATOR_VAULT, walletBuf], PUMP_PROGRAM);
+    [SEED_PUMP_CREATOR_VAULT, walletBuf],
+    PUMP_PROGRAM,
+  );
   const [vaultAuthority] = PublicKey.findProgramAddressSync(
-    [SEED_PUMPSWAP_CREATOR_VAULT, walletBuf], PUMPSWAP_PROGRAM);
+    [SEED_PUMPSWAP_CREATOR_VAULT, walletBuf],
+    PUMPSWAP_PROGRAM,
+  );
   const [ata] = PublicKey.findProgramAddressSync(
-    [vaultAuthority.toBuffer(), TOKEN_PROGRAM.toBuffer(), quoteMintBuf], ASSOCIATED_TOKEN_PROGRAM);
+    [vaultAuthority.toBuffer(), TOKEN_PROGRAM.toBuffer(), quoteMintBuf],
+    ASSOCIATED_TOKEN_PROGRAM,
+  );
 
   return [vault, ata];
 }

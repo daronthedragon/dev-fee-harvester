@@ -28,12 +28,12 @@ This finds all of it, shows you the total, lets you tick what you want, and clai
 
 ## What it finds
 
-| Source | Where the fees sit | Claimed with |
-| --- | --- | --- |
-| **pump.fun** | creator vault, as SOL | `collect_creator_fee` |
-| **PumpSwap** | vault ATA, as wrapped SOL | `collect_coin_creator_fee` |
-| **Fee sharing** | a vault owned by a *config PDA*, split by basis points | `distribute_creator_fees` |
-| **Bags** | Meteora pools / DAMM v2 / custom fee vaults | their API builds it, you sign locally |
+| Source          | Where the fees sit                                     | Claimed with                          |
+| --------------- | ------------------------------------------------------ | ------------------------------------- |
+| **pump.fun**    | creator vault, as SOL                                  | `collect_creator_fee`                 |
+| **PumpSwap**    | vault ATA, as wrapped SOL                              | `collect_coin_creator_fee`            |
+| **Fee sharing** | a vault owned by a _config PDA_, split by basis points | `distribute_creator_fees`             |
+| **Bags**        | Meteora pools / DAMM v2 / custom fee vaults            | their API builds it, you sign locally |
 
 The third one is the interesting case. Those fees are **invisible to an ordinary per-wallet scan** — see [Fee sharing](#fee-sharing).
 
@@ -47,7 +47,7 @@ Create `wallets.json` — a base58 secret key, a Solana CLI keypair array, or a 
 
 ```json
 [
-  { "label": "dev-main",   "secret": "base58-secret-key" },
+  { "label": "dev-main", "secret": "base58-secret-key" },
   { "label": "cold-watch", "pubkey": "9gquPn41Jjn3JEWwxfZU7894ACpaLzJD6fupcAqAdGZQ" }
 ]
 ```
@@ -151,11 +151,11 @@ workers=8  scanned 500,000 in 75.2s  = 6,645 wallets/s
 found 5/5 planted; all correct: true
 ```
 
-| | Before | After |
-| --- | ---: | ---: |
-| Load 20,000 wallets | 4481 ms | **104 ms** |
+|                       |            Before |          After |
+| --------------------- | ----------------: | -------------: |
+| Load 20,000 wallets   |           4481 ms |     **104 ms** |
 | Retained heap at 500k | ~2.8 GB projected | **5 MB, flat** |
-| Address derivation | 1,196 /s | **6,795 /s** |
+| Address derivation    |          1,196 /s |   **6,795 /s** |
 
 Three things got it there:
 
@@ -189,7 +189,7 @@ That run went from **0.018161 SOL** to **3.744895 SOL** — a wallet holding sha
 
 **Releasing them is a different instruction.** `distribute_creator_fees` splits the vault across the config's shareholders by basis points. It takes **no signer** — anyone may crank it, and funds can only ever reach the shareholders the config already names, so cranking someone else's config gains you nothing.
 
-Because *what moves* and *what you receive* are different numbers, the output shows both.
+Because _what moves_ and _what you receive_ are different numbers, the output shows both.
 
 Sharing configs live under a separate program, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ` (`pump_fees`) — which is why they are invisible if you look under pump.fun. That address is not hardcoded on trust; it is read from the `program` override in pump.fun's own IDL and re-checked by `npm run verify:onchain`.
 
@@ -202,11 +202,11 @@ Bags has no single instruction to build: a position may be a Meteora virtual poo
 
 Everything about the wire format was read out of the official [`@bagsfm/bags-sdk`](https://www.npmjs.com/package/@bagsfm/bags-sdk) rather than inferred from prose, which caught three things the documentation alone would not have:
 
-| | Correct | Easy mistake |
-| --- | --- | --- |
-| Claim request field | `feeClaimer` | `wallet` |
-| Transaction encoding | base58 | base64 |
-| Transaction type | legacy `Transaction` | `VersionedTransaction` |
+|                      | Correct              | Easy mistake           |
+| -------------------- | -------------------- | ---------------------- |
+| Claim request field  | `feeClaimer`         | `wallet`               |
+| Transaction encoding | base58               | base64                 |
+| Transaction type     | legacy `Transaction` | `VersionedTransaction` |
 
 Both endpoints are confirmed live: they answer `401` with Bags' own `{success:false,error}` envelope, while a nonexistent path answers `404` HTML.
 
@@ -217,7 +217,7 @@ Both endpoints are confirmed live: they answer `401` with Bags' own `{success:fa
 
 Keys are read from your local wallets file and used only to sign locally. They are never logged, never serialised into output, and never sent anywhere. `wallets.json` is in `.gitignore` — keep it that way.
 
-The tool never needs a key to *look*. Scanning works on watch-only pubkeys, and so does simulating a claim — a dry run is verified against real chain state without a signature — so you can see exactly what would land before you let it near a secret. Only `--execute` requires keys.
+The tool never needs a key to _look_. Scanning works on watch-only pubkeys, and so does simulating a claim — a dry run is verified against real chain state without a signature — so you can see exactly what would land before you let it near a secret. Only `--execute` requires keys.
 
 ## How this was verified
 
@@ -233,6 +233,7 @@ ERR: null
 AFTER   vault=890880
 SWEPT   64488314 lamports out of the vault
 ```
+
 </details>
 
 <details>
@@ -244,6 +245,7 @@ ERR: null
 vault 2669529318 -> 890880  (moved 2668638438)
 holder 5bQMLqKtmi…: 2136720 -> 2670775158  (+2668638438)
 ```
+
 </details>
 
 <details>
@@ -256,6 +258,7 @@ batch 2: 6 actions, 1214/1232 bytes, err: null
 batch 3: 2 actions,  744/1232 bytes, err: null
 TOTAL MOVED: 4505246557 lamports = 4.505247 SOL
 ```
+
 </details>
 
 Nothing here is guessed. Program IDs, discriminators, account ordering and PDA seeds are all read from the programs' own on-chain Anchor IDLs — re-check them any time with `npm run verify:onchain`, which also regenerates the error table.
@@ -269,26 +272,26 @@ A few details that are easy to get wrong, and are pinned by tests:
 
 ## Options
 
-| Flag | |
-| --- | --- |
-| `--wallets <path>` | wallets JSON / JSONL file, or a directory of keypair files |
-| `--rpc <url>` | RPC endpoint. A private one is strongly recommended |
-| `--payer <key>` | who pays fees, by label or pubkey |
-| `--min <sol>` | ignore wallets below this amount |
-| `--all` | take every claimable wallet, no picker |
-| `--execute` | actually send. Without it, everything is simulated |
-| `--priority-fee <n>` | compute unit price in micro-lamports |
-| `--max-per-tx <n>` | actions per transaction (default 8) |
-| `--batch-size <n>` | wallets scanned per pass (default 1000) |
-| `--concurrency <n>` | parallel RPC requests (default 8) |
-| `--workers <n>` | threads for address derivation (default cores−1, max 8; `0` disables) |
-| `--rpc-delay <ms>` | minimum gap between RPC requests, for strict rate limits |
-| `--progress <mode>` | `auto` (default), `always`, or `never` — the status line while scanning |
-| `--out <file.jsonl>` | append every funded wallet as it is found |
-| `--find-shares` | also hunt fees held for you in team sharing configs |
-| `--bags` | include Bags positions (needs `BAGS_API_KEY`) |
-| `--no-preflight` | skip the per-action simulation pass |
-| `--json` | machine-readable scan output |
+| Flag                 |                                                                         |
+| -------------------- | ----------------------------------------------------------------------- |
+| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files              |
+| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                     |
+| `--payer <key>`      | who pays fees, by label or pubkey                                       |
+| `--min <sol>`        | ignore wallets below this amount                                        |
+| `--all`              | take every claimable wallet, no picker                                  |
+| `--execute`          | actually send. Without it, everything is simulated                      |
+| `--priority-fee <n>` | compute unit price in micro-lamports                                    |
+| `--max-per-tx <n>`   | actions per transaction (default 8)                                     |
+| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                 |
+| `--concurrency <n>`  | parallel RPC requests (default 8)                                       |
+| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)   |
+| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                |
+| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning |
+| `--out <file.jsonl>` | append every funded wallet as it is found                               |
+| `--find-shares`      | also hunt fees held for you in team sharing configs                     |
+| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                           |
+| `--no-preflight`     | skip the per-action simulation pass                                     |
+| `--json`             | machine-readable scan output                                            |
 
 Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags. `FORCE_COLOR=1` keeps colour when output is piped or recorded; `NO_COLOR` always wins.
 

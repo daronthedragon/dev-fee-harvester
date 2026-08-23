@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Keypair } from '@solana/web3.js';
 import { createDerivePool, defaultWorkerCount, deriveForWallet } from '../src/derive.mjs';
-import { associatedTokenAddress, pumpCreatorVault, pumpswapCreatorVaultAuthority } from '../src/pda.mjs';
+import {
+  associatedTokenAddress,
+  pumpCreatorVault,
+  pumpswapCreatorVaultAuthority,
+} from '../src/pda.mjs';
 import { WSOL_MINT } from '../src/constants.mjs';
 import { createLimiter, delay, withRetry, forEachBatch } from '../src/limit.mjs';
 
@@ -10,8 +14,10 @@ test('deriveForWallet returns the creator vault and the PumpSwap vault ATA', () 
   const pk = Keypair.generate().publicKey;
   const [vault, ata] = deriveForWallet(pk);
   assert.equal(vault.toBase58(), pumpCreatorVault(pk).toBase58());
-  assert.equal(ata.toBase58(),
-    associatedTokenAddress(pumpswapCreatorVaultAuthority(pk), WSOL_MINT).toBase58());
+  assert.equal(
+    ata.toBase58(),
+    associatedTokenAddress(pumpswapCreatorVaultAuthority(pk), WSOL_MINT).toBase58(),
+  );
 });
 
 test('a zero-worker pool still derives, on the main thread', async () => {
@@ -49,7 +55,11 @@ test('a pool split across workers preserves input order', async () => {
   const pooled = await pool.derive(wallets);
   await pool.close();
   wallets.forEach((w, i) => {
-    assert.equal(pooled[i][0].toBase58(), pumpCreatorVault(w.publicKey).toBase58(), `out of order at ${i}`);
+    assert.equal(
+      pooled[i][0].toBase58(),
+      pumpCreatorVault(w.publicKey).toBase58(),
+      `out of order at ${i}`,
+    );
   });
 });
 
@@ -57,21 +67,28 @@ test('the limiter never exceeds its concurrency', async () => {
   const limit = createLimiter({ concurrency: 3 });
   let inFlight = 0;
   let peak = 0;
-  await Promise.all(Array.from({ length: 40 }, () => limit(async () => {
-    inFlight++;
-    peak = Math.max(peak, inFlight);
-    await delay(5);
-    inFlight--;
-  })));
+  await Promise.all(
+    Array.from({ length: 40 }, () =>
+      limit(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await delay(5);
+        inFlight--;
+      }),
+    ),
+  );
   assert.ok(peak <= 3, `peak concurrency was ${peak}`);
 });
 
 test('withRetry retries then succeeds', async () => {
   let calls = 0;
-  const value = await withRetry(async () => {
-    if (++calls < 3) throw new Error('429 Too Many Requests');
-    return 'ok';
-  }, { attempts: 5, baseDelayMs: 1 });
+  const value = await withRetry(
+    async () => {
+      if (++calls < 3) throw new Error('429 Too Many Requests');
+      return 'ok';
+    },
+    { attempts: 5, baseDelayMs: 1 },
+  );
   assert.equal(value, 'ok');
   assert.equal(calls, 3);
 });
@@ -81,7 +98,14 @@ test('withRetry throws rather than returning a silent empty result', async () =>
   // answer that costs money.
   let calls = 0;
   await assert.rejects(
-    () => withRetry(async () => { calls++; throw new Error('boom'); }, { attempts: 3, baseDelayMs: 1 }),
+    () =>
+      withRetry(
+        async () => {
+          calls++;
+          throw new Error('boom');
+        },
+        { attempts: 3, baseDelayMs: 1 },
+      ),
     /boom/,
   );
   assert.equal(calls, 3);
@@ -89,7 +113,17 @@ test('withRetry throws rather than returning a silent empty result', async () =>
 
 test('forEachBatch walks an async iterable in order', async () => {
   const seen = [];
-  await forEachBatch((async function* () { yield [1, 2]; yield [3]; })(),
-    (batch, i) => { seen.push([i, batch]); });
-  assert.deepEqual(seen, [[0, [1, 2]], [1, [3]]]);
+  await forEachBatch(
+    (async function* () {
+      yield [1, 2];
+      yield [3];
+    })(),
+    (batch, i) => {
+      seen.push([i, batch]);
+    },
+  );
+  assert.deepEqual(seen, [
+    [0, [1, 2]],
+    [1, [3]],
+  ]);
 });

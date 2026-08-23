@@ -8,7 +8,10 @@ import { createHash } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 import {
-  DISCRIMINATORS, PUMPSWAP_PROGRAM, PUMP_FEES_PROGRAM, PUMP_PROGRAM,
+  DISCRIMINATORS,
+  PUMPSWAP_PROGRAM,
+  PUMP_FEES_PROGRAM,
+  PUMP_PROGRAM,
   SHARING_CONFIG_DISCRIMINATOR,
 } from '../src/constants.mjs';
 
@@ -18,7 +21,9 @@ async function getIdl(programId) {
   const [base] = PublicKey.findProgramAddressSync([], programId);
   const acc = await c.getAccountInfo(await PublicKey.createWithSeed(base, 'anchor:idl', programId));
   if (!acc) throw new Error(`no on-chain IDL for ${programId.toBase58()}`);
-  return JSON.parse(inflateSync(acc.data.subarray(44, 44 + acc.data.readUInt32LE(40))).toString('utf8'));
+  return JSON.parse(
+    inflateSync(acc.data.subarray(44, 44 + acc.data.readUInt32LE(40))).toString('utf8'),
+  );
 }
 
 const disc = (name) => createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
@@ -27,56 +32,116 @@ let failures = 0;
 const check = (label, actual, expected) => {
   const ok = actual === expected;
   if (!ok) failures++;
-  console.log(`  ${ok ? 'OK  ' : 'FAIL'} ${label}${ok ? '' : `\n        expected ${expected}\n        actual   ${actual}`}`);
+  console.log(
+    `  ${ok ? 'OK  ' : 'FAIL'} ${label}${ok ? '' : `\n        expected ${expected}\n        actual   ${actual}`}`,
+  );
 };
 
 const pump = await getIdl(PUMP_PROGRAM);
 const amm = await getIdl(PUMPSWAP_PROGRAM);
 
 console.log('discriminators:');
-check('collect_creator_fee', [...disc('collect_creator_fee')].join(','), [...DISCRIMINATORS.collect_creator_fee].join(','));
-check('collect_coin_creator_fee', [...disc('collect_coin_creator_fee')].join(','), [...DISCRIMINATORS.collect_coin_creator_fee].join(','));
+check(
+  'collect_creator_fee',
+  [...disc('collect_creator_fee')].join(','),
+  [...DISCRIMINATORS.collect_creator_fee].join(','),
+);
+check(
+  'collect_coin_creator_fee',
+  [...disc('collect_coin_creator_fee')].join(','),
+  [...DISCRIMINATORS.collect_coin_creator_fee].join(','),
+);
 
 console.log('account order:');
-const order = (idl, n) => idl.instructions.find((i) => i.name === n).accounts.map((a) => a.name).join(',');
-check('collect_creator_fee', order(pump, 'collect_creator_fee'), 'creator,creator_vault,system_program,event_authority,program');
-check('collect_coin_creator_fee', order(amm, 'collect_coin_creator_fee'), 'quote_mint,quote_token_program,coin_creator,coin_creator_vault_authority,coin_creator_vault_ata,coin_creator_token_account,event_authority,program');
+const order = (idl, n) =>
+  idl.instructions
+    .find((i) => i.name === n)
+    .accounts.map((a) => a.name)
+    .join(',');
+check(
+  'collect_creator_fee',
+  order(pump, 'collect_creator_fee'),
+  'creator,creator_vault,system_program,event_authority,program',
+);
+check(
+  'collect_coin_creator_fee',
+  order(amm, 'collect_coin_creator_fee'),
+  'quote_mint,quote_token_program,coin_creator,coin_creator_vault_authority,coin_creator_vault_ata,coin_creator_token_account,event_authority,program',
+);
 
 console.log('pda seeds:');
 const seedOf = (idl, ix, acct) => {
   const a = idl.instructions.find((i) => i.name === ix).accounts.find((x) => x.name === acct);
   return Buffer.from(a.pda.seeds[0].value).toString();
 };
-check('pump creator vault seed', seedOf(pump, 'collect_creator_fee', 'creator_vault'), 'creator-vault');
-check('pumpswap creator vault seed', seedOf(amm, 'collect_coin_creator_fee', 'coin_creator_vault_authority'), 'creator_vault');
-check('bonding curve seed', seedOf(pump, 'distribute_creator_fees', 'bonding_curve'), 'bonding-curve');
-check('sharing config seed', seedOf(pump, 'distribute_creator_fees', 'sharing_config'), 'sharing-config');
+check(
+  'pump creator vault seed',
+  seedOf(pump, 'collect_creator_fee', 'creator_vault'),
+  'creator-vault',
+);
+check(
+  'pumpswap creator vault seed',
+  seedOf(amm, 'collect_coin_creator_fee', 'coin_creator_vault_authority'),
+  'creator_vault',
+);
+check(
+  'bonding curve seed',
+  seedOf(pump, 'distribute_creator_fees', 'bonding_curve'),
+  'bonding-curve',
+);
+check(
+  'sharing config seed',
+  seedOf(pump, 'distribute_creator_fees', 'sharing_config'),
+  'sharing-config',
+);
 
 console.log('fee sharing:');
-check('distribute_creator_fees discriminator',
-  [...disc('distribute_creator_fees')].join(','), [...DISCRIMINATORS.distribute_creator_fees].join(','));
-check('distribute_creator_fees account order', order(pump, 'distribute_creator_fees'),
-  'mint,bonding_curve,sharing_config,creator_vault,system_program,event_authority,program');
-check('SharingConfig account discriminator',
+check(
+  'distribute_creator_fees discriminator',
+  [...disc('distribute_creator_fees')].join(','),
+  [...DISCRIMINATORS.distribute_creator_fees].join(','),
+);
+check(
+  'distribute_creator_fees account order',
+  order(pump, 'distribute_creator_fees'),
+  'mint,bonding_curve,sharing_config,creator_vault,system_program,event_authority,program',
+);
+check(
+  'SharingConfig account discriminator',
   [...createHash('sha256').update('account:SharingConfig').digest().subarray(0, 8)].join(','),
-  [...SHARING_CONFIG_DISCRIMINATOR].join(','));
+  [...SHARING_CONFIG_DISCRIMINATOR].join(','),
+);
 
 // Sharing configs live under pump_fees, not pump.fun. The IDL states which
 // program owns that PDA, so take the address from there rather than trusting
 // a constant someone typed.
-const scPdaProgram = new PublicKey(Uint8Array.from(
-  pump.instructions.find((i) => i.name === 'distribute_creator_fees')
-    .accounts.find((a) => a.name === 'sharing_config').pda.program.value));
-check('pump_fees program (from IDL pda override)', scPdaProgram.toBase58(), PUMP_FEES_PROGRAM.toBase58());
+const scPdaProgram = new PublicKey(
+  Uint8Array.from(
+    pump.instructions
+      .find((i) => i.name === 'distribute_creator_fees')
+      .accounts.find((a) => a.name === 'sharing_config').pda.program.value,
+  ),
+);
+check(
+  'pump_fees program (from IDL pda override)',
+  scPdaProgram.toBase58(),
+  PUMP_FEES_PROGRAM.toBase58(),
+);
 const feesInfo = await c.getAccountInfo(PUMP_FEES_PROGRAM);
 check('pump_fees is an executable program', String(Boolean(feesInfo?.executable)), 'true');
 
 const errors = {};
-for (const [prefix, idl] of [['pump', pump], ['pumpswap', amm]])
-  for (const e of idl.errors ?? []) errors[e.code] ??= { name: e.name, msg: e.msg ?? null, program: prefix };
+for (const [prefix, idl] of [
+  ['pump', pump],
+  ['pumpswap', amm],
+])
+  for (const e of idl.errors ?? [])
+    errors[e.code] ??= { name: e.name, msg: e.msg ?? null, program: prefix };
 
-writeFileSync(new URL('../src/errors.mjs', import.meta.url),
-  `// GENERATED by scripts/verify-onchain.mjs from the on-chain Anchor IDLs.\n// Do not edit by hand; run \`npm run verify:onchain\` to refresh.\nexport const PROGRAM_ERRORS = ${JSON.stringify(errors, null, 2)};\n`);
+writeFileSync(
+  new URL('../src/errors.mjs', import.meta.url),
+  `// GENERATED by scripts/verify-onchain.mjs from the on-chain Anchor IDLs.\n// Do not edit by hand; run \`npm run verify:onchain\` to refresh.\nexport const PROGRAM_ERRORS = ${JSON.stringify(errors, null, 2)};\n`,
+);
 console.log(`\nwrote src/errors.mjs (${Object.keys(errors).length} error codes)`);
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -43,7 +43,11 @@ export function collectCreatorFeeIx(creator) {
  *   quote_mint, quote_token_program, coin_creator, coin_creator_vault_authority,
  *   coin_creator_vault_ata, coin_creator_token_account, event_authority, program
  */
-export function collectCoinCreatorFeeIx(coinCreator, quoteMint = WSOL_MINT, quoteTokenProgram = TOKEN_PROGRAM) {
+export function collectCoinCreatorFeeIx(
+  coinCreator,
+  quoteMint = WSOL_MINT,
+  quoteTokenProgram = TOKEN_PROGRAM,
+) {
   const vaultAuthority = pumpswapCreatorVaultAuthority(coinCreator);
   return new TransactionInstruction({
     programId: PUMPSWAP_PROGRAM,

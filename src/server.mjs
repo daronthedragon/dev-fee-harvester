@@ -19,8 +19,13 @@ import { attachDistributions } from './sharing.mjs';
  * just because the port happens to be open.
  */
 export async function startDashboard({
-  walletsPath, rpc, port = 4600, allowExecute = false, findShares = false,
-  concurrency = 8, rpcDelayMs = 0,
+  walletsPath,
+  rpc,
+  port = 4600,
+  allowExecute = false,
+  findShares = false,
+  concurrency = 8,
+  rpcDelayMs = 0,
 }) {
   const token = randomBytes(24).toString('hex');
   const connection = new Connection(rpc, {
@@ -43,21 +48,33 @@ export async function startDashboard({
     res.end(JSON.stringify(body));
   };
 
-  const readBody = (req) => new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > 1e6) { reject(new Error('body too large')); req.destroy(); }
+  const readBody = (req) =>
+    new Promise((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > 1e6) {
+          reject(new Error('body too large'));
+          req.destroy();
+        }
+      });
+      req.on('end', () => {
+        try {
+          resolve(data ? JSON.parse(data) : {});
+        } catch (e) {
+          reject(e);
+        }
+      });
     });
-    req.on('end', () => { try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); } });
-  });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
 
     if (url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace('__TOKEN__', token).replace('__ALLOW_EXECUTE__', String(allowExecute)));
+      return res.end(
+        html.replace('__TOKEN__', token).replace('__ALLOW_EXECUTE__', String(allowExecute)),
+      );
     }
 
     // Everything below is privileged.
@@ -67,10 +84,14 @@ export async function startDashboard({
 
     try {
       if (url.pathname === '/api/scan') {
-        const scanned = await attachDistributions(connection, await scanWallets(connection, wallets), {
-          findShares: findShares || url.searchParams.get('shares') === '1',
-          limiter,
-        });
+        const scanned = await attachDistributions(
+          connection,
+          await scanWallets(connection, wallets),
+          {
+            findShares: findShares || url.searchParams.get('shares') === '1',
+            limiter,
+          },
+        );
         // Same rule as the CLI: richest signer pays; a watch-only set still
         // scans, it just cannot claim.
         const byBalance = (a, b) => (b.walletLamports ?? 0) - (a.walletLamports ?? 0);
@@ -80,7 +101,14 @@ export async function startDashboard({
         const withFees = scanned.filter(isActionable);
         const checked = await preflight(connection, withFees, payer.publicKey, { limiter });
         const byKey = new Map(checked.map((r) => [r.publicKey.toBase58(), r]));
-        cache = scanned.map((r) => byKey.get(r.publicKey.toBase58()) ?? { ...r, status: 'empty', reason: 'nothing to claim' });
+        cache = scanned.map(
+          (r) =>
+            byKey.get(r.publicKey.toBase58()) ?? {
+              ...r,
+              status: 'empty',
+              reason: 'nothing to claim',
+            },
+        );
         return json(res, 200, {
           payer: payer.publicKey.toBase58(),
           allowExecute,
@@ -113,7 +141,8 @@ export async function startDashboard({
         const body = await readBody(req);
         const wanted = new Set(body.addresses ?? []);
         const chosen = cache.filter((r) => wanted.has(r.publicKey.toBase58()));
-        if (chosen.length === 0) return json(res, 400, { error: 'no known wallets in selection — rescan first' });
+        if (chosen.length === 0)
+          return json(res, 400, { error: 'no known wallets in selection — rescan first' });
 
         const execute = Boolean(body.execute) && allowExecute;
         // Dry runs need no key, so fall back to the richest wallet; only a
@@ -129,8 +158,12 @@ export async function startDashboard({
         return json(res, 200, {
           executed: execute,
           results: results.map((r) => ({
-            label: r.label, ok: r.ok, lamports: r.lamports, wallets: r.wallets,
-            signature: r.signature ?? null, err: r.err ? String(JSON.stringify(r.err)).slice(0, 300) : null,
+            label: r.label,
+            ok: r.ok,
+            lamports: r.lamports,
+            wallets: r.wallets,
+            signature: r.signature ?? null,
+            err: r.err ? String(JSON.stringify(r.err)).slice(0, 300) : null,
           })),
         });
       }
@@ -141,7 +174,9 @@ export async function startDashboard({
     return json(res, 404, { error: 'not found' });
   });
 
-  await new Promise((resolve) => { server.listen(port, '127.0.0.1', resolve); });
+  await new Promise((resolve) => {
+    server.listen(port, '127.0.0.1', resolve);
+  });
   const link = `http://127.0.0.1:${port}/?token=${token}`;
   console.log(`${c.bold('dashboard')} ${c.cyan(link)}`);
   console.log(c.dim(`${wallets.length} wallet(s) loaded · ${execLabel(allowExecute)}`));
@@ -149,4 +184,6 @@ export async function startDashboard({
 }
 
 const execLabel = (allow) =>
-  allow ? 'EXECUTE ENABLED — claims will be sent for real' : 'dry-run only (restart with --execute to send)';
+  allow
+    ? 'EXECUTE ENABLED — claims will be sent for real'
+    : 'dry-run only (restart with --execute to send)';

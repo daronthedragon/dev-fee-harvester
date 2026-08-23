@@ -30,7 +30,11 @@ async function launchChromium() {
     }
   }
   for (const channel of [process.env.PLAYWRIGHT_CHANNEL, 'msedge', 'chrome'].filter(Boolean)) {
-    try { return await chromium.launch({ channel }); } catch { /* try the next */ }
+    try {
+      return await chromium.launch({ channel });
+    } catch {
+      /* try the next */
+    }
   }
   return chromium.launch();
 }
@@ -41,23 +45,31 @@ const ENGINES = [
   { name: 'webkit', launch: () => webkit.launch() },
 ];
 
-const only = process.env.BROWSER_ENGINES?.split(',').map((s) => s.trim()).filter(Boolean);
+const only = process.env.BROWSER_ENGINES?.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-const engines = await Promise.all(ENGINES.map(async (engine) => {
-  if (process.env.NO_BROWSER_TESTS) return { ...engine, browser: null, reason: 'disabled by NO_BROWSER_TESTS' };
-  if (only && !only.includes(engine.name)) return { ...engine, browser: null, reason: `not in BROWSER_ENGINES=${only.join(',')}` };
-  try {
-    return { ...engine, browser: await engine.launch(), reason: null };
-  } catch (err) {
-    return {
-      ...engine,
-      browser: null,
-      reason: `${engine.name} unavailable — run "npx playwright-core install ${engine.name}" (${err.message.split('\n')[0].slice(0, 80)})`,
-    };
-  }
-}));
+const engines = await Promise.all(
+  ENGINES.map(async (engine) => {
+    if (process.env.NO_BROWSER_TESTS)
+      return { ...engine, browser: null, reason: 'disabled by NO_BROWSER_TESTS' };
+    if (only && !only.includes(engine.name))
+      return { ...engine, browser: null, reason: `not in BROWSER_ENGINES=${only.join(',')}` };
+    try {
+      return { ...engine, browser: await engine.launch(), reason: null };
+    } catch (err) {
+      return {
+        ...engine,
+        browser: null,
+        reason: `${engine.name} unavailable — run "npx playwright-core install ${engine.name}" (${err.message.split('\n')[0].slice(0, 80)})`,
+      };
+    }
+  }),
+);
 
-after(async () => { await Promise.all(engines.map((e) => e.browser?.close())); });
+after(async () => {
+  await Promise.all(engines.map((e) => e.browser?.close()));
+});
 
 const px = (v) => Number.parseFloat(v);
 
@@ -78,7 +90,15 @@ for (const engine of engines) {
       page.on('pageerror', (e) => errors.push(e.message));
       await page.goto(site.url, { waitUntil: 'domcontentloaded' });
       if ((options.wallets ?? []).length > 0) await page.waitForSelector('#rows tr');
-      return { page, site, errors, close: async () => { await context.close(); await site.close(); } };
+      return {
+        page,
+        site,
+        errors,
+        close: async () => {
+          await context.close();
+          await site.close();
+        },
+      };
     }
 
     /* ------------------------------------------------------------ layout -- */
@@ -86,25 +106,34 @@ for (const engine of engines) {
     it('does not scroll sideways at a desktop width', async () => {
       const t = await open({ wallets: [directWallet(), shareWallet(14)] });
       try {
-        const overflow = await t.page.evaluate(() =>
-          document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        const overflow = await t.page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        );
         assert.ok(overflow <= 1, `page overflows horizontally by ${overflow}px`);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('scrolls a wide table inside its own box, not the page', async () => {
-      const t = await open({ wallets: [directWallet(), shareWallet(3)] }, { width: 420, height: 900 });
+      const t = await open(
+        { wallets: [directWallet(), shareWallet(3)] },
+        { width: 420, height: 900 },
+      );
       try {
         const { pageOverflow, wrapScrolls } = await t.page.evaluate(() => {
           const wrap = document.querySelector('.wrap');
           return {
-            pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            pageOverflow:
+              document.documentElement.scrollWidth - document.documentElement.clientWidth,
             wrapScrolls: wrap.scrollWidth > wrap.clientWidth,
           };
         });
         assert.ok(pageOverflow <= 1, `page overflows by ${pageOverflow}px at 420 wide`);
         assert.ok(wrapScrolls, 'the table wrapper is the thing that scrolls');
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('keeps the toolbar on one row at full width', async () => {
@@ -115,9 +144,13 @@ for (const engine of engines) {
           t.page.locator('#rescan').boundingBox(),
           t.page.locator('#exec').boundingBox(),
         ]);
-        assert.ok(Math.abs(first.y - last.y) < 2,
-          `toolbar wrapped: #rescan y=${first.y}, #exec y=${last.y}`);
-      } finally { await t.close(); }
+        assert.ok(
+          Math.abs(first.y - last.y) < 2,
+          `toolbar wrapped: #rescan y=${first.y}, #exec y=${last.y}`,
+        );
+      } finally {
+        await t.close();
+      }
     });
 
     it('grows the table when shares are expanded', async () => {
@@ -128,7 +161,9 @@ for (const engine of engines) {
         await t.page.waitForFunction(() => document.querySelectorAll('tr.sub').length === 15);
         const after = (await t.page.locator('table').boundingBox()).height;
         assert.ok(after > before + 100, `expected real growth, got ${before} -> ${after}`);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     /* ---------------------------------------------------------- keyboard -- */
@@ -141,16 +176,23 @@ for (const engine of engines) {
         await t.page.keyboard.press('Enter');
         await t.page.waitForFunction(() => document.querySelectorAll('tr.sub').length === 5);
         assert.equal(await t.page.getAttribute('.disc', 'aria-expanded'), 'true');
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('will not submit a claim from the disabled button', async () => {
       const t = await open({ wallets: [directWallet()], allowExecute: false });
       try {
-        await t.page.locator('#exec').click({ force: true, timeout: 2000 }).catch(() => {});
+        await t.page
+          .locator('#exec')
+          .click({ force: true, timeout: 2000 })
+          .catch(() => {});
         await t.page.waitForTimeout(200);
         assert.equal(t.site.calls.filter((c) => c.path === '/api/claim').length, 0);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     /* ------------------------------------------------------------- theme -- */
@@ -158,17 +200,25 @@ for (const engine of engines) {
     it('applies the dark palette under a dark colour scheme', async () => {
       const t = await open({ wallets: [directWallet()] }, { colorScheme: 'dark' });
       try {
-        assert.equal(await t.page.evaluate(() => getComputedStyle(document.body).backgroundColor),
-          'rgb(14, 17, 22)');
-      } finally { await t.close(); }
+        assert.equal(
+          await t.page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+          'rgb(14, 17, 22)',
+        );
+      } finally {
+        await t.close();
+      }
     });
 
     it('applies the light palette under a light colour scheme', async () => {
       const t = await open({ wallets: [directWallet()] }, { colorScheme: 'light' });
       try {
-        assert.equal(await t.page.evaluate(() => getComputedStyle(document.body).backgroundColor),
-          'rgb(246, 248, 250)');
-      } finally { await t.close(); }
+        assert.equal(
+          await t.page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+          'rgb(246, 248, 250)',
+        );
+      } finally {
+        await t.close();
+      }
     });
 
     it('renders a ready status green', async () => {
@@ -176,17 +226,23 @@ for (const engine of engines) {
       try {
         assert.equal(
           await t.page.evaluate(() => getComputedStyle(document.querySelector('.tag.ready')).color),
-          'rgb(63, 185, 80)');
-      } finally { await t.close(); }
+          'rgb(63, 185, 80)',
+        );
+      } finally {
+        await t.close();
+      }
     });
 
     it('dims a blocked row', async () => {
       const t = await open({ wallets: [directWallet({ status: 'blocked', reason: 'nope' })] });
       try {
-        const opacity = await t.page.evaluate(() =>
-          getComputedStyle(document.querySelector('tr.blocked')).opacity);
+        const opacity = await t.page.evaluate(
+          () => getComputedStyle(document.querySelector('tr.blocked')).opacity,
+        );
         assert.ok(px(opacity) < 1, `expected dimming, got opacity ${opacity}`);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('highlights a selected row', async () => {
@@ -194,13 +250,17 @@ for (const engine of engines) {
       // silently does nothing on an engine that has not implemented it.
       const t = await open({ wallets: [directWallet()] });
       try {
-        const selected = await t.page.evaluate(() =>
-          getComputedStyle(document.querySelector('#rows tr.sel')).backgroundColor);
+        const selected = await t.page.evaluate(
+          () => getComputedStyle(document.querySelector('#rows tr.sel')).backgroundColor,
+        );
         await t.page.click('#none');
-        const plain = await t.page.evaluate(() =>
-          getComputedStyle(document.querySelector('#rows tr')).backgroundColor);
+        const plain = await t.page.evaluate(
+          () => getComputedStyle(document.querySelector('#rows tr')).backgroundColor,
+        );
         assert.notEqual(selected, plain, `selection is invisible: both rows are ${selected}`);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     /* --------------------------------------------------------- behaviour -- */
@@ -213,16 +273,24 @@ for (const engine of engines) {
         await t.page.click('#all');
         await t.page.click('#hideEmpty');
         assert.deepEqual(t.errors, [], 'no uncaught page errors');
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('posts the selection on Simulate and renders the result', async () => {
       const claimResult = {
         executed: false,
-        results: [{
-          label: 'batch 1/1 (2 actions)', ok: true, lamports: 4_776_222_000,
-          wallets: ['dev-04'], signature: null, err: null,
-        }],
+        results: [
+          {
+            label: 'batch 1/1 (2 actions)',
+            ok: true,
+            lamports: 4_776_222_000,
+            wallets: ['dev-04'],
+            signature: null,
+            err: null,
+          },
+        ],
       };
       const t = await open({ wallets: [directWallet(), shareWallet(2)], claimResult });
       try {
@@ -236,7 +304,9 @@ for (const engine of engines) {
         assert.equal(claim.token, 'test-token');
         assert.equal(claim.body.execute, false);
         assert.equal(claim.body.addresses.length, 2);
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
 
     it('updates the running total as rows are ticked', async () => {
@@ -247,7 +317,9 @@ for (const engine of engines) {
         await t.page.locator('#rows tr:not(.sub) input[type=checkbox]').first().click();
         assert.equal(await t.page.textContent('#selTotal'), '1.049487');
         assert.equal(await t.page.textContent('#selCount'), '1');
-      } finally { await t.close(); }
+      } finally {
+        await t.close();
+      }
     });
   });
 }

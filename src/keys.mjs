@@ -30,7 +30,8 @@ const shortLabel = (pk) => `${pk.slice(0, 4)}..${pk.slice(-4)}`;
 
 /** Public key straight out of the secret key's tail — no curve maths. */
 function publicKeyFromSecret(secretKey) {
-  if (secretKey.length !== 64) throw new Error(`expected a 64-byte secret key, got ${secretKey.length}`);
+  if (secretKey.length !== 64)
+    throw new Error(`expected a 64-byte secret key, got ${secretKey.length}`);
   return new PublicKey(secretKey.slice(32, 64));
 }
 
@@ -43,11 +44,19 @@ function toSecretBytes(secret) {
 
 const signingWallet = (secretKey, label) => {
   const publicKey = publicKeyFromSecret(secretKey);
-  return { publicKey, label: label ?? shortLabel(publicKey.toBase58()), secretKey, watchOnly: false };
+  return {
+    publicKey,
+    label: label ?? shortLabel(publicKey.toBase58()),
+    secretKey,
+    watchOnly: false,
+  };
 };
 
 const watchWallet = (publicKey, label) => ({
-  publicKey, label: label ?? shortLabel(publicKey.toBase58()), secretKey: null, watchOnly: true,
+  publicKey,
+  label: label ?? shortLabel(publicKey.toBase58()),
+  secretKey: null,
+  watchOnly: true,
 });
 
 /** Normalise one entry from a wallets file into a wallet record. */
@@ -59,7 +68,9 @@ export function parseEntry(entry, index) {
       const bytes = decodeBase58(trimmed);
       if (bytes.length === 32) return watchWallet(new PublicKey(trimmed));
       if (bytes.length === 64) return signingWallet(bytes);
-    } catch { /* fall through to the explicit error below */ }
+    } catch {
+      /* fall through to the explicit error below */
+    }
     throw new Error(`wallets[${index}] is not a 32-byte public key or a 64-byte secret key`);
   }
 
@@ -85,7 +96,8 @@ const signerCache = new Map();
 
 /** The Keypair for a wallet, derived on first use. Throws if watch-only. */
 export function signerFor(wallet) {
-  if (!canSign(wallet)) throw new Error(`wallet ${wallet?.label ?? '?'} is watch-only and cannot sign`);
+  if (!canSign(wallet))
+    throw new Error(`wallet ${wallet?.label ?? '?'} is watch-only and cannot sign`);
   const key = wallet.publicKey.toBase58();
   let kp = signerCache.get(key);
   if (!kp) {
@@ -111,7 +123,10 @@ async function* streamEntries(target) {
   // JSONL streams line by line, which is the only format that stays in
   // constant memory — JSON.parse of a giant array has to materialise it all.
   if (/\.(jsonl|ndjson)$/i.test(target)) {
-    const rl = readline.createInterface({ input: createReadStream(target, 'utf8'), crlfDelay: Infinity });
+    const rl = readline.createInterface({
+      input: createReadStream(target, 'utf8'),
+      crlfDelay: Infinity,
+    });
     for await (const line of rl) {
       const text = line.trim();
       if (text.length > 0) yield { entry: JSON.parse(text) };
@@ -121,7 +136,10 @@ async function* streamEntries(target) {
 
   const raw = JSON.parse(await readFile(target, 'utf8'));
   const list = Array.isArray(raw) ? raw : raw.wallets;
-  if (!Array.isArray(list)) throw new Error('wallets file must be a JSON array, JSONL, or an object with a "wallets" array');
+  if (!Array.isArray(list))
+    throw new Error(
+      'wallets file must be a JSON array, JSONL, or an object with a "wallets" array',
+    );
   for (const entry of list) yield { entry };
 }
 
@@ -149,7 +167,10 @@ export async function* streamWallets(target, { batchSize = 1000, dedupe = false 
       seen.add(key);
     }
     batch.push(wallet);
-    if (batch.length >= batchSize) { yield batch; batch = []; }
+    if (batch.length >= batchSize) {
+      yield batch;
+      batch = [];
+    }
   }
   if (batch.length > 0) yield batch;
 }

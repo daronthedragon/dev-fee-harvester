@@ -22,7 +22,9 @@ export const PUMP_FEES_PROGRAM = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtc
 
 export const SYSTEM_PROGRAM = new PublicKey('11111111111111111111111111111111');
 export const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-export const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+export const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
+  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+);
 export const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 
 // Anchor discriminators = sha256("global:<snake_case_name>")[0..8].

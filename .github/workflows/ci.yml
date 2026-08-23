@@ -25,8 +25,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, node: '20', label: 'ubuntu · node 20', engines: 'chromium firefox webkit' }
-          - { os: ubuntu-latest, node: '22', label: 'ubuntu · node 22', engines: 'chromium firefox webkit' }
+          - {
+              os: ubuntu-latest,
+              node: '20',
+              label: 'ubuntu · node 20',
+              engines: 'chromium firefox webkit',
+            }
+          - {
+              os: ubuntu-latest,
+              node: '22',
+              label: 'ubuntu · node 22',
+              engines: 'chromium firefox webkit',
+            }
           # Windows is here for path and platform handling, which is where every
           # portability bug in this project showed up first. Engine coverage is
           # the Ubuntu legs' job, so this one runs Chromium alone — Windows

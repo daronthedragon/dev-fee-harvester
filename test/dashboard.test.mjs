@@ -22,10 +22,19 @@ const TOKEN = 'test-token';
 
 /** A wallet with a claimable balance of its own. */
 const directWallet = (over = {}) => ({
-  label: 'dev-04', address: '3z4vj1nAujLnciPgZaGz4VYecZa6gbYUg3Yr9MoyuiMG',
-  pump: 1_049_487_000, pumpswap: 0, sharing: 0, total: 1_049_487_000,
-  status: 'ready', reason: null, partial: false, watchOnly: true,
-  sharingError: null, distributions: [], ...over,
+  label: 'dev-04',
+  address: '3z4vj1nAujLnciPgZaGz4VYecZa6gbYUg3Yr9MoyuiMG',
+  pump: 1_049_487_000,
+  pumpswap: 0,
+  sharing: 0,
+  total: 1_049_487_000,
+  status: 'ready',
+  reason: null,
+  partial: false,
+  watchOnly: true,
+  sharingError: null,
+  distributions: [],
+  ...over,
 });
 
 /**
@@ -33,22 +42,43 @@ const directWallet = (over = {}) => ({
  * zero — the money lives in vaults it does not own.
  */
 const shareWallet = (count = 14, over = {}) => ({
-  label: 'dev-share', address: '5bQMLqKtmiGzLba11rwD6eLutqdWD7L3WC8Rt1V5dw4J',
-  pump: 0, pumpswap: 0, sharing: 3_726_735_000, total: 3_726_735_000,
-  status: 'ready', reason: null, partial: false, watchOnly: true, sharingError: null,
+  label: 'dev-share',
+  address: '5bQMLqKtmiGzLba11rwD6eLutqdWD7L3WC8Rt1V5dw4J',
+  pump: 0,
+  pumpswap: 0,
+  sharing: 3_726_735_000,
+  total: 3_726_735_000,
+  status: 'ready',
+  reason: null,
+  partial: false,
+  watchOnly: true,
+  sharingError: null,
   distributions: Array.from({ length: count }, (_, i) => ({
-    mint: `Mint${String(i).padStart(40, 'x')}`, kind: 'share',
-    distributable: 100_000_000, userShare: 50_000_000, shareholders: 2,
-    blocked: null, unverified: null,
+    mint: `Mint${String(i).padStart(40, 'x')}`,
+    kind: 'share',
+    distributable: 100_000_000,
+    userShare: 50_000_000,
+    shareholders: 2,
+    blocked: null,
+    unverified: null,
   })),
   ...over,
 });
 
 const emptyWallet = (over = {}) => ({
-  label: 'cold-01', address: 'SysvarC1ock11111111111111111111111111111111',
-  pump: 0, pumpswap: 0, sharing: 0, total: 0,
-  status: 'empty', reason: 'nothing to claim', partial: false, watchOnly: true,
-  sharingError: null, distributions: [], ...over,
+  label: 'cold-01',
+  address: 'SysvarC1ock11111111111111111111111111111111',
+  pump: 0,
+  pumpswap: 0,
+  sharing: 0,
+  total: 0,
+  status: 'empty',
+  reason: 'nothing to claim',
+  partial: false,
+  watchOnly: true,
+  sharingError: null,
+  distributions: [],
+  ...over,
 });
 
 const waitFor = async (fn, what = 'condition', tries = 200) => {
@@ -81,7 +111,8 @@ async function mount({ wallets = [], allowExecute = false, claimResult } = {}) {
   });
 
   const { document } = dom.window;
-  if (wallets.length > 0) await waitFor(() => document.querySelectorAll('#rows tr').length > 0, 'rows');
+  if (wallets.length > 0)
+    await waitFor(() => document.querySelectorAll('#rows tr').length > 0, 'rows');
   return { dom, window: dom.window, document, calls };
 }
 
@@ -89,7 +120,8 @@ const $ = (doc, sel) => doc.querySelector(sel);
 const rowsOf = (doc) => [...doc.querySelectorAll('#rows tr')];
 const walletRows = (doc) => rowsOf(doc).filter((r) => !r.classList.contains('sub'));
 const subRows = (doc) => rowsOf(doc).filter((r) => r.classList.contains('sub'));
-const totalText = (doc) => `${$(doc, '#selTotal').textContent} / ${$(doc, '#selCount').textContent}`;
+const totalText = (doc) =>
+  `${$(doc, '#selTotal').textContent} / ${$(doc, '#selCount').textContent}`;
 
 /* ------------------------------------------------------------ rendering -- */
 
@@ -183,7 +215,10 @@ test('a share whose check never ran is distinguished from a rejected one', async
 });
 
 test('two wallets expand independently', async () => {
-  const other = shareWallet(3, { label: 'dev-two', address: 'AnotherAddress1111111111111111111111111111' });
+  const other = shareWallet(3, {
+    label: 'dev-two',
+    address: 'AnotherAddress1111111111111111111111111111',
+  });
   const { document } = await mount({ wallets: [shareWallet(14), other] });
   const discs = [...document.querySelectorAll('.disc')];
   assert.equal(discs.length, 2);
@@ -267,7 +302,16 @@ test('"Claim for real" is available when the server allows it', async () => {
 test('claim results are listed with their outcome', async () => {
   const claimResult = {
     executed: false,
-    results: [{ label: 'batch 1/1 (2 actions)', ok: true, lamports: 4_776_222_000, wallets: ['dev-04'], signature: null, err: null }],
+    results: [
+      {
+        label: 'batch 1/1 (2 actions)',
+        ok: true,
+        lamports: 4_776_222_000,
+        wallets: ['dev-04'],
+        signature: null,
+        err: null,
+      },
+    ],
   };
   const { document } = await mount({ wallets: [directWallet()], claimResult });
   $(document, '#dry').click();
@@ -280,7 +324,16 @@ test('claim results are listed with their outcome', async () => {
 test('a failed batch is shown as failed, with its reason', async () => {
   const claimResult = {
     executed: false,
-    results: [{ label: 'batch 1/1', ok: false, lamports: 0, wallets: ['dev-04'], signature: null, err: '"AccountNotFound"' }],
+    results: [
+      {
+        label: 'batch 1/1',
+        ok: false,
+        lamports: 0,
+        wallets: ['dev-04'],
+        signature: null,
+        err: '"AccountNotFound"',
+      },
+    ],
   };
   const { document } = await mount({ wallets: [directWallet()], claimResult });
   $(document, '#dry').click();
@@ -292,7 +345,9 @@ test('a failed batch is shown as failed, with its reason', async () => {
 
 test('an incomplete shareholder scan is surfaced, not silently ignored', async () => {
   // A rate-limited sweep reporting zero would read as "no fees owed".
-  const wallets = [directWallet({ sharingError: 'shareholder slot 3 failed after 6 attempts: 429' })];
+  const wallets = [
+    directWallet({ sharingError: 'shareholder slot 3 failed after 6 attempts: 429' }),
+  ];
   const { document } = await mount({ wallets });
   const warning = $(document, '.scanfail');
   assert.ok(warning, 'the failure is rendered');

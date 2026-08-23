@@ -5,7 +5,17 @@ import { LAMPORTS_PER_SOL } from '../src/constants.mjs';
 import { BagsClient, claimBags, scanBags } from '../src/bags.mjs';
 import { claimAll, isActionable } from '../src/claim.mjs';
 import { createWriteStream } from 'node:fs';
-import { c, clearProgress, count, pad, padStart, progress, setProgressMode, sol, statusTag } from '../src/format.mjs';
+import {
+  c,
+  clearProgress,
+  count,
+  pad,
+  padStart,
+  progress,
+  setProgressMode,
+  sol,
+  statusTag,
+} from '../src/format.mjs';
 import { canSign, streamWallets } from '../src/keys.mjs';
 import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
@@ -51,16 +61,25 @@ function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (!a.startsWith('--')) { args._.push(a); continue; }
+    if (!a.startsWith('--')) {
+      args._.push(a);
+      continue;
+    }
     const key = a.slice(2);
     const next = argv[i + 1];
     if (next === undefined || next.startsWith('--')) args[key] = true;
-    else { args[key] = next; i++; }
+    else {
+      args[key] = next;
+      i++;
+    }
   }
   return args;
 }
 
-const die = (msg) => { console.error(c.red(`error: ${msg}`)); process.exit(1); };
+const die = (msg) => {
+  console.error(c.red(`error: ${msg}`));
+  process.exit(1);
+};
 
 async function loadAndScan(args, { requireSigner = false } = {}) {
   const walletsPath = args.wallets ?? process.env.WALLETS ?? './wallets.json';
@@ -113,27 +132,38 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
       // Distributions are attached inside the stream: a wallet that only holds
       // a share elsewhere has no balance of its own, so attaching afterwards
       // would run only on wallets that had already survived the filter.
-      enrich: (batch) => attachDistributions(connection, batch, {
-        findShares: Boolean(args['find-shares']),
-        limiter: shareLimiter,
-        onProgress: (n, total) => progress(`shareholder scan ${count(n)}/${count(total)}`),
-      }),
+      enrich: (batch) =>
+        attachDistributions(connection, batch, {
+          findShares: Boolean(args['find-shares']),
+          limiter: shareLimiter,
+          onProgress: (n, total) => progress(`shareholder scan ${count(n)}/${count(total)}`),
+        }),
       workers: args.workers === undefined ? defaultWorkerCount() : Number(args.workers),
       concurrency: Number(args.concurrency ?? 8),
       minDelayMs: Number(args['rpc-delay'] ?? 0),
       onRow: considerPayer,
-      onRetry: () => { retries++; },
+      onRetry: () => {
+        retries++;
+      },
       onProgress: (scanned, found) =>
-        progress(`scanned ${count(scanned)} wallets - ${count(found)} with fees` + (retries ? ` - ${retries} retries` : '')),
+        progress(
+          `scanned ${count(scanned)} wallets - ${count(found)} with fees` +
+            (retries ? ` - ${retries} retries` : ''),
+        ),
     })) {
       for (const row of chunk) {
-        if (minLamports > 0 && row.totalLamports < minLamports && row.selfConfigDistributable <= 0) continue;
+        if (minLamports > 0 && row.totalLamports < minLamports && row.selfConfigDistributable <= 0)
+          continue;
         rows.push(row);
-        out?.write(JSON.stringify({
-          label: row.label, address: row.publicKey.toBase58(),
-          pumpLamports: row.pumpLamports, pumpswapLamports: row.pumpswapLamports,
-          totalLamports: row.totalLamports,
-        }) + String.fromCharCode(10));
+        out?.write(
+          JSON.stringify({
+            label: row.label,
+            address: row.publicKey.toBase58(),
+            pumpLamports: row.pumpLamports,
+            pumpswapLamports: row.pumpswapLamports,
+            totalLamports: row.totalLamports,
+          }) + String.fromCharCode(10),
+        );
       }
     }
   } catch (e) {
@@ -144,18 +174,27 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   out?.end();
 
   if (payer === null) {
-    die(requireSigner
-      ? 'no signing wallet available to pay fees — add one, or drop --execute to simulate'
-      : 'no wallets found');
+    die(
+      requireSigner
+        ? 'no signing wallet available to pay fees — add one, or drop --execute to simulate'
+        : 'no wallets found',
+    );
   }
   if (requireSigner && !canSign(payer)) {
-    die(wanted ? `--payer ${wanted} is watch-only and cannot pay fees`
-              : 'every wallet is watch-only; at least one signing key is needed to claim');
+    die(
+      wanted
+        ? `--payer ${wanted} is watch-only and cannot pay fees`
+        : 'every wallet is watch-only; at least one signing key is needed to claim',
+    );
   }
   if (wanted && !payer) die(`--payer ${wanted} is not one of the loaded wallets`);
   if ((payer.walletLamports ?? 0) < MIN_PAYER_LAMPORTS) {
-    console.error(c.yellow(`warning: fee payer ${payer.label} holds only ${sol(payer.walletLamports ?? 0)} SOL - ` +
-      'transactions may fail. Pass --payer <label|pubkey> to choose a funded wallet.'));
+    console.error(
+      c.yellow(
+        `warning: fee payer ${payer.label} holds only ${sol(payer.walletLamports ?? 0)} SOL - ` +
+          'transactions may fail. Pass --payer <label|pubkey> to choose a funded wallet.',
+      ),
+    );
   }
 
   if (args.bags) {
@@ -175,7 +214,10 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     });
     clearProgress();
     const byKey = new Map(checked.map((r) => [r.publicKey.toBase58(), r]));
-    rows = rows.map((r) => byKey.get(r.publicKey.toBase58()) ?? { ...r, status: 'empty', reason: 'nothing to claim' });
+    rows = rows.map(
+      (r) =>
+        byKey.get(r.publicKey.toBase58()) ?? { ...r, status: 'empty', reason: 'nothing to claim' },
+    );
   }
 
   return { connection, rows, payer };
@@ -186,39 +228,54 @@ const MIN_PAYER_LAMPORTS = 50_000;
 
 function printTable(rows) {
   const labelWidth = Math.min(24, Math.max(6, ...rows.map((r) => r.label.length)));
-  console.log(`\n${c.bold(pad('WALLET', labelWidth))} ${c.bold(pad('ADDRESS', 12))} ${c.bold(padStart('PUMP', 12))} ${c.bold(padStart('PUMPSWAP', 12))} ${c.bold(padStart('SHARING', 12))} ${c.bold(padStart('TOTAL', 12))}  STATUS`);
+  console.log(
+    `\n${c.bold(pad('WALLET', labelWidth))} ${c.bold(pad('ADDRESS', 12))} ${c.bold(padStart('PUMP', 12))} ${c.bold(padStart('PUMPSWAP', 12))} ${c.bold(padStart('SHARING', 12))} ${c.bold(padStart('TOTAL', 12))}  STATUS`,
+  );
   for (const r of rows) {
     console.log(
       `${pad(r.label, labelWidth)} ${c.dim(pad(r.publicKey.toBase58().slice(0, 10) + '…', 12))} ` +
-      `${padStart(sol(r.pumpLamports), 12)} ${padStart(sol(r.pumpswapLamports), 12)} ` +
-      `${padStart(sol(r.sharingLamports ?? 0), 12)} ` +
-      `${c.bold(padStart(sol(r.totalLamports), 12))}  ${statusTag(r.status)}` +
-      (r.reason && r.status === 'blocked' ? c.dim(` · ${r.reason}`) : ''),
+        `${padStart(sol(r.pumpLamports), 12)} ${padStart(sol(r.pumpswapLamports), 12)} ` +
+        `${padStart(sol(r.sharingLamports ?? 0), 12)} ` +
+        `${c.bold(padStart(sol(r.totalLamports), 12))}  ${statusTag(r.status)}` +
+        (r.reason && r.status === 'blocked' ? c.dim(` · ${r.reason}`) : ''),
     );
     // Distributions are worth spelling out: the money leaves a shared vault
     // and is split by basis points, so "what moves" and "what you get" differ.
     for (const d of r.distributions ?? []) {
       const holders = d.config.shareholders.length;
-      const note = d.distributable > 0
-        ? `crank ${sol(d.distributable)} SOL to ${holders} shareholder${holders === 1 ? '' : 's'}`
-        : c.dim('cranked by another row');
-      console.log(c.dim(`    └ ${d.kind === 'self' ? 'sharing config' : 'share in'} ${d.mint.toBase58().slice(0, 10)}… · `) +
-        note + (d.userShare > 0 ? c.green(`  → you receive ${sol(d.userShare)} SOL`) : ''));
+      const note =
+        d.distributable > 0
+          ? `crank ${sol(d.distributable)} SOL to ${holders} shareholder${holders === 1 ? '' : 's'}`
+          : c.dim('cranked by another row');
+      console.log(
+        c.dim(
+          `    └ ${d.kind === 'self' ? 'sharing config' : 'share in'} ${d.mint.toBase58().slice(0, 10)}… · `,
+        ) +
+          note +
+          (d.userShare > 0 ? c.green(`  → you receive ${sol(d.userShare)} SOL`) : ''),
+      );
     }
   }
   for (const r of rows) {
     if (r.sharingError) {
       console.log(c.red(`    ! shareholder scan incomplete for ${r.label}: ${r.sharingError}`));
-      console.log(c.red('      totals below may understate what is owed. Retry, or use a private RPC.'));
+      console.log(
+        c.red('      totals below may understate what is owed. Retry, or use a private RPC.'),
+      );
     }
   }
   const ready = rows.filter((r) => (r.status ?? 'ready') === 'ready');
   const blocked = rows.filter((r) => r.status === 'blocked');
   const total = ready.reduce((n, r) => n + r.totalLamports, 0);
-  const cranked = ready.reduce((n, r) => n + (r.distributions ?? []).reduce((m, d) => m + d.distributable, 0), 0);
-  console.log(`\n${c.green(c.bold(`${sol(total)} SOL`))} claimable across ${ready.length} wallet(s)` +
-    (cranked > 0 ? c.cyan(`  ·  ${sol(cranked)} SOL released by distribution`) : '') +
-    (blocked.length ? c.yellow(`  ·  ${blocked.length} blocked`) : ''));
+  const cranked = ready.reduce(
+    (n, r) => n + (r.distributions ?? []).reduce((m, d) => m + d.distributable, 0),
+    0,
+  );
+  console.log(
+    `\n${c.green(c.bold(`${sol(total)} SOL`))} claimable across ${ready.length} wallet(s)` +
+      (cranked > 0 ? c.cyan(`  ·  ${sol(cranked)} SOL released by distribution`) : '') +
+      (blocked.length ? c.yellow(`  ·  ${blocked.length} blocked`) : ''),
+  );
 }
 
 async function main() {
@@ -226,18 +283,29 @@ async function main() {
   const cmd = args._[0] ?? 'help';
 
   if (args.progress !== undefined) {
-    try { setProgressMode(String(args.progress)); } catch (e) { die(e.message); }
+    try {
+      setProgressMode(String(args.progress));
+    } catch (e) {
+      die(e.message);
+    }
   }
 
-  if (cmd === 'help' || args.help) { console.log(HELP); return; }
+  if (cmd === 'help' || args.help) {
+    console.log(HELP);
+    return;
+  }
 
   if (cmd === 'dashboard') {
     const walletsPath = args.wallets ?? process.env.WALLETS ?? './wallets.json';
     const rpc = args.rpc ?? process.env.RPC ?? 'https://api.mainnet-beta.solana.com';
     await startDashboard({
-      walletsPath, rpc, port: Number(args.port ?? 4600),
-      allowExecute: Boolean(args.execute), findShares: Boolean(args['find-shares']),
-      concurrency: Number(args.concurrency ?? 8), rpcDelayMs: Number(args['rpc-delay'] ?? 0),
+      walletsPath,
+      rpc,
+      port: Number(args.port ?? 4600),
+      allowExecute: Boolean(args.execute),
+      findShares: Boolean(args['find-shares']),
+      concurrency: Number(args.concurrency ?? 8),
+      rpcDelayMs: Number(args['rpc-delay'] ?? 0),
     });
     return;
   }
@@ -245,42 +313,70 @@ async function main() {
   if (cmd === 'scan') {
     const { rows } = await loadAndScan(args);
     if (args.json) {
-      console.log(JSON.stringify(rows.map((r) => ({
-        label: r.label, address: r.publicKey.toBase58(), pumpLamports: r.pumpLamports,
-        pumpswapLamports: r.pumpswapLamports, bagsLamports: r.bagsLamports ?? 0,
-        totalLamports: r.totalLamports, status: r.status ?? 'ready', reason: r.reason ?? null,
-      })), null, 2));
+      console.log(
+        JSON.stringify(
+          rows.map((r) => ({
+            label: r.label,
+            address: r.publicKey.toBase58(),
+            pumpLamports: r.pumpLamports,
+            pumpswapLamports: r.pumpswapLamports,
+            bagsLamports: r.bagsLamports ?? 0,
+            totalLamports: r.totalLamports,
+            status: r.status ?? 'ready',
+            reason: r.reason ?? null,
+          })),
+          null,
+          2,
+        ),
+      );
     } else printTable(rows);
     return;
   }
 
   if (cmd === 'claim') {
-    const { connection, rows, payer } = await loadAndScan(args, { requireSigner: Boolean(args.execute) });
+    const { connection, rows, payer } = await loadAndScan(args, {
+      requireSigner: Boolean(args.execute),
+    });
     const claimable = rows.filter(isActionable);
-    if (claimable.length === 0) { console.log(c.yellow('nothing to claim.')); return; }
+    if (claimable.length === 0) {
+      console.log(c.yellow('nothing to claim.'));
+      return;
+    }
 
     printTable(rows);
 
     let chosen;
     if (args.all) chosen = claimable.filter((r) => (r.status ?? 'ready') === 'ready');
-    else chosen = await multiSelect(claimable, { title: 'Select wallets to harvest' }).catch((e) => die(e.message));
+    else
+      chosen = await multiSelect(claimable, { title: 'Select wallets to harvest' }).catch((e) =>
+        die(e.message),
+      );
 
-    if (chosen.length === 0) { console.log(c.yellow('no wallets selected.')); return; }
+    if (chosen.length === 0) {
+      console.log(c.yellow('no wallets selected.'));
+      return;
+    }
 
     const dryRun = !args.execute;
     const total = chosen.reduce((n, r) => n + r.totalLamports, 0);
-    console.log(`\n${dryRun ? c.yellow('DRY RUN') : c.red(c.bold('EXECUTING'))} · ${chosen.length} wallet(s) · ${c.bold(sol(total))} SOL · fee payer ${c.cyan(payer.label)}\n`);
+    console.log(
+      `\n${dryRun ? c.yellow('DRY RUN') : c.red(c.bold('EXECUTING'))} · ${chosen.length} wallet(s) · ${c.bold(sol(total))} SOL · fee payer ${c.cyan(payer.label)}\n`,
+    );
 
     const results = await claimAll(connection, chosen, payer, {
       dryRun,
       computeUnitPrice: Number(args['priority-fee'] ?? 0),
       maxPerTx: Number(args['max-per-tx'] ?? 8),
       onEvent: (e) => {
-        if (e.type === 'planned') console.log(c.dim(`packed ${e.wallets} wallet(s) into ${e.batches} transaction(s)\n`));
+        if (e.type === 'planned')
+          console.log(c.dim(`packed ${e.wallets} wallet(s) into ${e.batches} transaction(s)\n`));
         if (e.type === 'batch') {
           const tag = e.ok ? c.green('ok') : c.red('fail');
-          console.log(`  ${tag}  ${pad(e.label, 30)} ${padStart(sol(e.lamports), 12)} SOL` +
-            (e.signature ? `  ${c.dim(e.signature)}` : '') + (e.err ? `  ${c.red(JSON.stringify(e.err).slice(0, 90))}` : ''));
+          console.log(
+            `  ${tag}  ${pad(e.label, 30)} ${padStart(sol(e.lamports), 12)} SOL` +
+              (e.signature ? `  ${c.dim(e.signature)}` : '') +
+              (e.err ? `  ${c.red(JSON.stringify(e.err).slice(0, 90))}` : ''),
+          );
         }
       },
     }).catch((e) => die(e.message));
@@ -291,13 +387,17 @@ async function main() {
       if (bagsRows.length) {
         console.log(c.dim('\nbags positions:'));
         for (const r of await claimBags(connection, client, bagsRows, { dryRun })) {
-          console.log(`  ${r.ok ? c.green('ok') : c.red('fail')}  ${r.label} ${c.dim(r.mint ?? '')} ${r.err ? c.red(String(r.err).slice(0, 80)) : ''}`);
+          console.log(
+            `  ${r.ok ? c.green('ok') : c.red('fail')}  ${r.label} ${c.dim(r.mint ?? '')} ${r.err ? c.red(String(r.err).slice(0, 80)) : ''}`,
+          );
         }
       }
     }
 
     const landed = results.filter((r) => r.ok).reduce((n, r) => n + r.lamports, 0);
-    console.log(`\n${c.bold(sol(landed))} SOL ${dryRun ? c.yellow('would be claimed (simulated)') : c.green('claimed')}`);
+    console.log(
+      `\n${c.bold(sol(landed))} SOL ${dryRun ? c.yellow('would be claimed (simulated)') : c.green('claimed')}`,
+    );
     if (dryRun) console.log(c.dim('re-run with --execute to send these transactions for real.'));
     return;
   }

@@ -29,13 +29,16 @@ export default [
       globals: { ...globals.node },
     },
     rules: {
-      'no-unused-vars': ['error', {
-        argsIgnorePattern: '^_',
-        varsIgnorePattern: '^_',
-        caughtErrors: 'none',        // `catch {}` and unused error bindings are deliberate in places
-      }],
-      'no-await-in-loop': 'off',      // sequential batches are the point in several places
-      'no-console': 'off',            // this is a CLI
+      'no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrors: 'none', // `catch {}` and unused error bindings are deliberate in places
+        },
+      ],
+      'no-await-in-loop': 'off', // sequential batches are the point in several places
+      'no-console': 'off', // this is a CLI
       eqeqeq: ['error', 'always', { null: 'ignore' }],
       'no-var': 'error',
       'prefer-const': 'error',

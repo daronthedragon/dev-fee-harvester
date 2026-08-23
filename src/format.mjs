@@ -5,8 +5,9 @@ import { LAMPORTS_PER_SOL } from './constants.mjs';
  * so. FORCE_COLOR covers piping into a pager, a CI log, or a recording;
  * NO_COLOR always wins, per https://no-color.org.
  */
-const useColor = !process.env.NO_COLOR
-  && (Boolean(process.stdout.isTTY) || ['1', 'true', 'yes'].includes(process.env.FORCE_COLOR ?? ''));
+const useColor =
+  !process.env.NO_COLOR &&
+  (Boolean(process.stdout.isTTY) || ['1', 'true', 'yes'].includes(process.env.FORCE_COLOR ?? ''));
 const wrap = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 
 export const c = {

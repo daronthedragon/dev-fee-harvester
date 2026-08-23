@@ -58,25 +58,35 @@ export async function preflight(connection, rows, payer, options = {}) {
   }
 
   let done = 0;
-  await Promise.all(jobs.map(({ row, item }) => gate(async () => {
-    const { rejected, unverified } = await checkItem(connection, item, payer, blockhash);
-    if (item.kind === 'claim') {
-      row.directBlocked = rejected;
-      row.directUnverified = unverified;
-    } else {
-      const d = row.distributions.find((x) => x.mint.equals(item.mint));
-      if (d) { d.blocked = rejected; d.unverified = unverified; }
-    }
-    onProgress?.(++done, jobs.length);
-  })));
+  await Promise.all(
+    jobs.map(({ row, item }) =>
+      gate(async () => {
+        const { rejected, unverified } = await checkItem(connection, item, payer, blockhash);
+        if (item.kind === 'claim') {
+          row.directBlocked = rejected;
+          row.directUnverified = unverified;
+        } else {
+          const d = row.distributions.find((x) => x.mint.equals(item.mint));
+          if (d) {
+            d.blocked = rejected;
+            d.unverified = unverified;
+          }
+        }
+        onProgress?.(++done, jobs.length);
+      }),
+    ),
+  );
 
   return out.map((row) => summarise(row));
 }
 
 async function checkItem(connection, item, payer, blockhash) {
   const tx = new VersionedTransaction(
-    new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: item.instructions })
-      .compileToV0Message(),
+    new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: blockhash,
+      instructions: item.instructions,
+    }).compileToV0Message(),
   );
   try {
     const sim = await withRetry(
@@ -94,7 +104,13 @@ async function checkItem(connection, item, payer, blockhash) {
 /** Roll per-item verdicts back up into one status for the row. */
 function summarise(row) {
   if (!isActionable(row)) {
-    return { ...row, status: 'empty', reason: 'nothing to claim', verifiedLamports: 0, sharingLamports: row.sharingLamports ?? 0 };
+    return {
+      ...row,
+      status: 'empty',
+      reason: 'nothing to claim',
+      verifiedLamports: 0,
+      sharingLamports: row.sharingLamports ?? 0,
+    };
   }
 
   const directAttempted = (row.pumpLamports ?? 0) > 0 || (row.pumpswapLamports ?? 0) > 0;
@@ -111,14 +127,16 @@ function summarise(row) {
 
   const anyOk = directOk || okDists.length > 0;
   const rejections = [row.directBlocked, ...badDists.map((d) => d.blocked)].filter(Boolean);
-  const unverified = [row.directUnverified, ...unsureDists.map((d) => d.unverified)].filter(Boolean);
+  const unverified = [row.directUnverified, ...unsureDists.map((d) => d.unverified)].filter(
+    Boolean,
+  );
   const reasons = [...new Set([...rejections, ...unverified])];
 
   // Recompute the user's share from the distributions that survived.
   const sharingLamports = okDists.reduce((n, d) => n + (d.userShare ?? 0), 0);
 
   // Nothing verified and nothing rejected means the checks themselves failed.
-  const status = anyOk ? 'ready' : (rejections.length > 0 ? 'blocked' : 'unchecked');
+  const status = anyOk ? 'ready' : rejections.length > 0 ? 'blocked' : 'unchecked';
 
   return {
     ...row,
@@ -128,6 +146,7 @@ function summarise(row) {
     unverified: unverified.length > 0,
     verifiedLamports: verified,
     sharingLamports,
-    totalLamports: (directOk ? (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0) : 0) + sharingLamports,
+    totalLamports:
+      (directOk ? (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0) : 0) + sharingLamports,
   };
 }

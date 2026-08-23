@@ -8,12 +8,19 @@ const BLOCKHASH = '11111111111111111111111111111111';
 const payer = Keypair.generate().publicKey;
 
 const row = (label, lamports) => ({
-  publicKey: Keypair.generate().publicKey, label, secretKey: null,
-  pumpLamports: lamports, pumpswapLamports: 0, totalLamports: lamports, distributions: [],
+  publicKey: Keypair.generate().publicKey,
+  label,
+  secretKey: null,
+  pumpLamports: lamports,
+  pumpswapLamports: 0,
+  totalLamports: lamports,
+  distributions: [],
 });
 
 const chainWith = (behaviour) => ({
-  async getLatestBlockhash() { return { blockhash: BLOCKHASH }; },
+  async getLatestBlockhash() {
+    return { blockhash: BLOCKHASH };
+  },
   simulateTransaction: behaviour,
 });
 
@@ -25,7 +32,9 @@ test('a clean simulation marks the row ready', async () => {
 });
 
 test('a chain rejection marks the row blocked with the program reason', async () => {
-  const chain = chainWith(async () => ({ value: { err: { InstructionError: [0, { Custom: 6050 }] } } }));
+  const chain = chainWith(async () => ({
+    value: { err: { InstructionError: [0, { Custom: 6050 }] } },
+  }));
   const [out] = await preflight(chain, [row('a', 1e8)], payer);
   assert.equal(out.status, 'blocked');
   assert.match(out.reason, /sharing config/i);
@@ -35,7 +44,9 @@ test('a chain rejection marks the row blocked with the program reason', async ()
 test('an RPC failure is not reported as a rejection', async () => {
   // A rate-limited request says nothing about whether the claim would work.
   // Calling it "blocked" writes off claimable money on a transport hiccup.
-  const chain = chainWith(async () => { throw new Error('429 Too Many Requests'); });
+  const chain = chainWith(async () => {
+    throw new Error('429 Too Many Requests');
+  });
   const [out] = await preflight(chain, [row('a', 1e8)], payer);
   assert.equal(out.status, 'unchecked', 'not blocked');
   assert.ok(out.unverified);
@@ -54,7 +65,9 @@ test('a transient RPC failure recovers on retry', async () => {
 });
 
 test('unverified work is kept out of batches', async () => {
-  const chain = chainWith(async () => { throw new Error('network down'); });
+  const chain = chainWith(async () => {
+    throw new Error('network down');
+  });
   const [out] = await preflight(chain, [row('a', 1e8)], payer);
   assert.equal(workItems(out, payer).length, 0, 'nothing unconfirmed goes into a transaction');
 });
@@ -66,7 +79,9 @@ test('one failed check does not condemn a row that also has good work', async ()
     ...row('a', 0),
     distributions: [failing, working].map((m) => ({
       config: { address: Keypair.generate().publicKey, mint: m, shareholders: [] },
-      mint: m, distributable: 5e8, userShare: 5e8,
+      mint: m,
+      distributable: 5e8,
+      userShare: 5e8,
     })),
   };
 

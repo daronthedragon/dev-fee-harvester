@@ -1,8 +1,4 @@
-import {
-  ComputeBudgetProgram,
-  TransactionMessage,
-  VersionedTransaction,
-} from '@solana/web3.js';
+import { ComputeBudgetProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { WSOL_MINT } from './constants.mjs';
 import { collectCoinCreatorFeeIx, collectCreatorFeeIx, createAtaIdempotentIx } from './ix.mjs';
 import { distributeCreatorFeesIx } from './sharing.mjs';
@@ -76,8 +72,13 @@ export const instructionsForWallet = (row, payer, quoteMint = WSOL_MINT) =>
 
 /** What this row actually moves on-chain: direct claims plus any crank. */
 export const movedLamports = (row) =>
-  ((row.directBlocked || row.directUnverified) ? 0 : (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0)) +
-  (row.distributions ?? []).reduce((n, d) => n + ((d.blocked || d.unverified) ? 0 : (d.distributable ?? 0)), 0);
+  (row.directBlocked || row.directUnverified
+    ? 0
+    : (row.pumpLamports ?? 0) + (row.pumpswapLamports ?? 0)) +
+  (row.distributions ?? []).reduce(
+    (n, d) => n + (d.blocked || d.unverified ? 0 : (d.distributable ?? 0)),
+    0,
+  );
 
 /** A row is worth acting on if it can be claimed or distributed. */
 export const isActionable = (row) =>
@@ -87,8 +88,11 @@ export const isActionable = (row) =>
 
 function compile(payer, blockhash, instructions) {
   return new VersionedTransaction(
-    new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions })
-      .compileToV0Message(),
+    new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: blockhash,
+      instructions,
+    }).compileToV0Message(),
   );
 }
 
@@ -103,9 +107,10 @@ function compile(payer, blockhash, instructions) {
  * shareholder.
  */
 export function packBatches(items, payer, { blockhash, computeUnitPrice = 0, maxPerTx = 8 } = {}) {
-  const budgetIxs = computeUnitPrice > 0
-    ? [ComputeBudgetProgram.setComputeUnitPrice({ microLamports: computeUnitPrice })]
-    : [];
+  const budgetIxs =
+    computeUnitPrice > 0
+      ? [ComputeBudgetProgram.setComputeUnitPrice({ microLamports: computeUnitPrice })]
+      : [];
 
   const batches = [];
   let current = { items: [], instructions: [...budgetIxs] };
@@ -121,8 +126,9 @@ export function packBatches(items, payer, { blockhash, computeUnitPrice = 0, max
 
     let fits;
     try {
-      fits = compile(payer, blockhash, candidate).serialize().length <= MAX_TX_BYTES
-        && candidateItems.length <= maxPerTx;
+      fits =
+        compile(payer, blockhash, candidate).serialize().length <= MAX_TX_BYTES &&
+        candidateItems.length <= maxPerTx;
     } catch {
       fits = false; // compile threw (too many accounts) => treat as not fitting
     }
@@ -134,7 +140,10 @@ export function packBatches(items, payer, { blockhash, computeUnitPrice = 0, max
 
     if (current.items.length === 0) {
       // One item too big for an empty transaction can never be sent.
-      batches.push({ ...finalise({ items: [item], instructions: [...budgetIxs, ...item.instructions] }), oversized: true });
+      batches.push({
+        ...finalise({ items: [item], instructions: [...budgetIxs, ...item.instructions] }),
+        oversized: true,
+      });
       continue;
     }
 
@@ -151,7 +160,10 @@ function finalise(batch) {
   const seen = new Set();
   for (const item of batch.items) {
     const key = item.row.publicKey.toBase58();
-    if (!seen.has(key)) { seen.add(key); rows.push(item.row); }
+    if (!seen.has(key)) {
+      seen.add(key);
+      rows.push(item.row);
+    }
   }
   return { ...batch, rows, lamports: batch.items.reduce((n, i) => n + i.lamports, 0) };
 }
@@ -196,9 +208,18 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
   const items = usable.flatMap((r) => workItems(r, payerWallet.publicKey, quoteMint));
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  const batches = packBatches(items, payerWallet.publicKey, { blockhash, computeUnitPrice, maxPerTx });
+  const batches = packBatches(items, payerWallet.publicKey, {
+    blockhash,
+    computeUnitPrice,
+    maxPerTx,
+  });
 
-  onEvent({ type: 'planned', batches: batches.length, wallets: usable.length, items: items.length });
+  onEvent({
+    type: 'planned',
+    batches: batches.length,
+    wallets: usable.length,
+    items: items.length,
+  });
 
   const results = [];
   for (const [i, batch] of batches.entries()) {
@@ -210,25 +231,52 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
       // Derive signing keys only for the wallets in this one transaction, and
       // only for keys we actually hold — a dry run may hold none.
       const signers = new Map();
-      if (canSign(payerWallet)) signers.set(payerWallet.publicKey.toBase58(), signerFor(payerWallet));
+      if (canSign(payerWallet))
+        signers.set(payerWallet.publicKey.toBase58(), signerFor(payerWallet));
       for (const item of batch.items) {
         if (item.signerWallet) signers.set(item.signerKey.toBase58(), signerFor(item.signerWallet));
       }
       if (signers.size > 0) tx.sign([...signers.values()]);
 
       if (dryRun) {
-        const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
         const ok = sim.value.err === null;
-        results.push({ label, ok, lamports, wallets: batch.items.map((i2) => i2.label), err: sim.value.err, logs: sim.value.logs, simulated: true });
+        results.push({
+          label,
+          ok,
+          lamports,
+          wallets: batch.items.map((i2) => i2.label),
+          err: sim.value.err,
+          logs: sim.value.logs,
+          simulated: true,
+        });
         onEvent({ type: 'batch', label, ok, lamports, simulated: true, err: sim.value.err });
       } else {
         const signature = await connection.sendTransaction(tx, { maxRetries: 5 });
-        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
-        results.push({ label, ok: true, lamports, wallets: batch.items.map((i2) => i2.label), signature });
+        await connection.confirmTransaction(
+          { signature, blockhash, lastValidBlockHeight },
+          'confirmed',
+        );
+        results.push({
+          label,
+          ok: true,
+          lamports,
+          wallets: batch.items.map((i2) => i2.label),
+          signature,
+        });
         onEvent({ type: 'batch', label, ok: true, lamports, signature });
       }
     } catch (err) {
-      results.push({ label, ok: false, lamports, wallets: batch.items.map((i2) => i2.label), err: err.message });
+      results.push({
+        label,
+        ok: false,
+        lamports,
+        wallets: batch.items.map((i2) => i2.label),
+        err: err.message,
+      });
       onEvent({ type: 'batch', label, ok: false, lamports, err: err.message });
     }
   }

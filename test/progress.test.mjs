@@ -9,15 +9,26 @@ import { clearProgress, progress, setProgressMode } from '../src/format.mjs';
 function captureStderr(fn) {
   const original = process.stderr.write;
   let buffer = '';
-  process.stderr.write = (chunk) => { buffer += chunk; return true; };
-  try { fn(); } finally { process.stderr.write = original; }
+  process.stderr.write = (chunk) => {
+    buffer += chunk;
+    return true;
+  };
+  try {
+    fn();
+  } finally {
+    process.stderr.write = original;
+  }
   return buffer;
 }
 
 const withTTY = (isTTY, fn) => {
   const original = process.stderr.isTTY;
   process.stderr.isTTY = isTTY;
-  try { return fn(); } finally { process.stderr.isTTY = original; }
+  try {
+    return fn();
+  } finally {
+    process.stderr.isTTY = original;
+  }
 };
 
 test.afterEach(() => setProgressMode('auto'));
@@ -50,9 +61,15 @@ test('never stays silent even on a terminal', () => {
 
 test('clearProgress follows the same mode', () => {
   setProgressMode('never');
-  assert.equal(withTTY(true, () => captureStderr(() => clearProgress())), '');
+  assert.equal(
+    withTTY(true, () => captureStderr(() => clearProgress())),
+    '',
+  );
   setProgressMode('always');
-  assert.notEqual(withTTY(false, () => captureStderr(() => clearProgress())), '');
+  assert.notEqual(
+    withTTY(false, () => captureStderr(() => clearProgress())),
+    '',
+  );
 });
 
 test('an unknown mode is rejected rather than silently ignored', () => {

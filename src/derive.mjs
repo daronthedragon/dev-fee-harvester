@@ -58,11 +58,12 @@ export function createDerivePool({ workers = defaultWorkerCount(), quoteMint = W
     });
   }
 
-  const send = (slot, keys) => new Promise((resolve, reject) => {
-    const id = nextId++;
-    slot.handlers.set(id, { resolve, reject });
-    slot.worker.postMessage({ id, keys }, [keys]);
-  });
+  const send = (slot, keys) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      slot.handlers.set(id, { resolve, reject });
+      slot.worker.postMessage({ id, keys }, [keys]);
+    });
 
   let cursor = 0;
   const derive = async (wallets) => {
@@ -75,24 +76,27 @@ export function createDerivePool({ workers = defaultWorkerCount(), quoteMint = W
       slice.forEach((w, j) => Buffer.from((w.publicKey ?? w).toBytes()).copy(packed, j * 32));
       const slot = pool[cursor++ % pool.length];
       const ab = packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength);
-      jobs.push(send(slot, ab).then((out) => {
-        const results = [];
-        for (let k = 0; k < slice.length; k++) {
-          results.push([
-            new PublicKey(out.subarray(k * 64, k * 64 + 32)),
-            new PublicKey(out.subarray(k * 64 + 32, k * 64 + 64)),
-          ]);
-        }
-        return results;
-      }));
+      jobs.push(
+        send(slot, ab).then((out) => {
+          const results = [];
+          for (let k = 0; k < slice.length; k++) {
+            results.push([
+              new PublicKey(out.subarray(k * 64, k * 64 + 32)),
+              new PublicKey(out.subarray(k * 64 + 32, k * 64 + 64)),
+            ]);
+          }
+          return results;
+        }),
+      );
     }
     return (await Promise.all(jobs)).flat();
   };
 
-
   return {
     size: pool.length,
     derive,
-    close: async () => { await Promise.all(pool.map((s) => s.worker.terminate())); },
+    close: async () => {
+      await Promise.all(pool.map((s) => s.worker.terminate()));
+    },
   };
 }

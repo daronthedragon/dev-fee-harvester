@@ -9,9 +9,14 @@ import { isActionable, movedLamports } from './claim.mjs';
  *
  * space toggle · a all · n none · r ready only · enter confirm · q cancel
  */
-export async function multiSelect(rows, { title = 'Select wallets', out = process.stdout, input = process.stdin } = {}) {
+export async function multiSelect(
+  rows,
+  { title = 'Select wallets', out = process.stdout, input = process.stdin } = {},
+) {
   if (!input.isTTY) {
-    throw new Error('not a TTY — re-run with --all to select every claimable wallet non-interactively');
+    throw new Error(
+      'not a TTY — re-run with --all to select every claimable wallet non-interactively',
+    );
   }
 
   // Pre-tick everything worth claiming; the common case is "take it all".
@@ -32,8 +37,12 @@ export async function multiSelect(rows, { title = 'Select wallets', out = proces
     if (!first) out.write(`\x1b[${rows.length + 4}A`);
     const total = rows.reduce((n, r, i) => n + (selected[i] ? movedLamports(r) : 0), 0);
     const count = selected.filter(Boolean).length;
-    out.write(`\x1b[0J${c.bold(title)}  ${c.dim(`${count}/${rows.length} selected · ${sol(total)} SOL`)}\n`);
-    out.write(c.grey('space toggle · a all · n none · r ready only · enter confirm · q cancel') + '\n\n');
+    out.write(
+      `\x1b[0J${c.bold(title)}  ${c.dim(`${count}/${rows.length} selected · ${sol(total)} SOL`)}\n`,
+    );
+    out.write(
+      c.grey('space toggle · a all · n none · r ready only · enter confirm · q cancel') + '\n\n',
+    );
     rows.forEach((r, i) => {
       const here = i === cursor;
       const box = selected[i] ? c.green('[x]') : '[ ]';
@@ -58,9 +67,14 @@ export async function multiSelect(rows, { title = 'Select wallets', out = proces
       else if (key.name === 'space') selected[cursor] = !selected[cursor];
       else if (key.name === 'a') selected.fill(true);
       else if (key.name === 'n') selected.fill(false);
-      else if (key.name === 'r') rows.forEach((r, i) => { selected[i] = pickable(r); });
-      else if (key.name === 'return') { cleanup(); return resolve(rows.filter((_, i) => selected[i])); }
-      else if (key.name === 'q' || key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+      else if (key.name === 'r')
+        rows.forEach((r, i) => {
+          selected[i] = pickable(r);
+        });
+      else if (key.name === 'return') {
+        cleanup();
+        return resolve(rows.filter((_, i) => selected[i]));
+      } else if (key.name === 'q' || key.name === 'escape' || (key.ctrl && key.name === 'c')) {
         cleanup();
         return reject(new Error('cancelled'));
       } else return;

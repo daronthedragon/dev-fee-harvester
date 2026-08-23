@@ -35,7 +35,12 @@ export class BagsApiError extends Error {
 }
 
 export class BagsClient {
-  constructor({ apiKey, baseUrl = BAGS_DEFAULT_BASE_URL, fetchImpl = fetch, timeoutMs = 60000 } = {}) {
+  constructor({
+    apiKey,
+    baseUrl = BAGS_DEFAULT_BASE_URL,
+    fetchImpl = fetch,
+    timeoutMs = 60000,
+  } = {}) {
     if (!apiKey) throw new Error('BAGS_API_KEY is required for the Bags adapter');
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -50,7 +55,11 @@ export class BagsClient {
   async #request(path, init = {}) {
     const res = await this.fetch(`${this.baseUrl}${path}`, {
       ...init,
-      headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json', ...(init.headers ?? {}) },
+      headers: {
+        'x-api-key': this.apiKey,
+        'content-type': 'application/json',
+        ...(init.headers ?? {}),
+      },
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
@@ -59,16 +68,25 @@ export class BagsClient {
     try {
       body = JSON.parse(text);
     } catch {
-      throw new BagsApiError(`bags ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`,
-        { status: res.status, path });
+      throw new BagsApiError(
+        `bags ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`,
+        { status: res.status, path },
+      );
     }
 
     if (body && typeof body === 'object' && body.success === false) {
-      throw new BagsApiError(body.error ?? `bags ${path} failed`, { status: res.status, path, body });
+      throw new BagsApiError(body.error ?? `bags ${path} failed`, {
+        status: res.status,
+        path,
+        body,
+      });
     }
     if (!res.ok) {
-      throw new BagsApiError(body?.error ?? body?.message ?? `bags ${path} -> HTTP ${res.status}`,
-        { status: res.status, path, body });
+      throw new BagsApiError(body?.error ?? body?.message ?? `bags ${path} -> HTTP ${res.status}`, {
+        status: res.status,
+        path,
+        body,
+      });
     }
     return body?.response ?? body;
   }
@@ -102,7 +120,8 @@ export class BagsClient {
     });
     return (Array.isArray(list) ? list : []).map((entry) => {
       const encoded = typeof entry === 'string' ? entry : entry?.tx;
-      if (!encoded) throw new BagsApiError('bags claim-txs entry had no "tx" field', { body: entry });
+      if (!encoded)
+        throw new BagsApiError('bags claim-txs entry had no "tx" field', { body: entry });
       return Transaction.from(Buffer.from(decodeBase58(encoded)));
     });
   }
@@ -122,7 +141,11 @@ export async function scanBags(client, wallets, { concurrency = 4, onProgress } 
       if (!next) return;
       const [i, w] = next;
       try {
-        out[i] = { ...w, bagsLamports: await client.claimableLamports(w.publicKey), bagsError: null };
+        out[i] = {
+          ...w,
+          bagsLamports: await client.claimableLamports(w.publicKey),
+          bagsError: null,
+        };
       } catch (err) {
         // Recorded, never swallowed: a failed lookup must not read as "no fees".
         out[i] = { ...w, bagsLamports: 0, bagsError: err.message };
@@ -142,7 +165,12 @@ export async function scanBags(client, wallets, { concurrency = 4, onProgress } 
  * missing, because overwriting them would invalidate any signature Bags has
  * already applied.
  */
-export async function claimBags(connection, client, rows, { dryRun = true, onEvent = () => {} } = {}) {
+export async function claimBags(
+  connection,
+  client,
+  rows,
+  { dryRun = true, onEvent = () => {} } = {},
+) {
   const results = [];
 
   for (const row of rows) {
@@ -176,11 +204,18 @@ export async function claimBags(connection, client, rows, { dryRun = true, onEve
           if (dryRun) {
             const sim = await connection.simulateTransaction(tx);
             results.push({
-              label: row.label, mint, lamports, simulated: true,
-              ok: sim.value.err === null, err: sim.value.err, logs: sim.value.logs,
+              label: row.label,
+              mint,
+              lamports,
+              simulated: true,
+              ok: sim.value.err === null,
+              err: sim.value.err,
+              logs: sim.value.logs,
             });
           } else {
-            const signature = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 5 });
+            const signature = await connection.sendRawTransaction(tx.serialize(), {
+              maxRetries: 5,
+            });
             await connection.confirmTransaction(signature, 'confirmed');
             results.push({ label: row.label, mint, lamports, ok: true, signature });
           }

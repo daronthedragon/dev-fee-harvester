@@ -11,7 +11,10 @@
  * Sleep. Written with a block body on purpose: an arrow here returns the
  * timer id into the promise executor, which reads as a value nobody consumes.
  */
-export const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+export const delay = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 /** A promise pool: at most `concurrency` tasks in flight, optional pacing. */
 export function createLimiter({ concurrency = 8, minDelayMs = 0 } = {}) {
@@ -26,11 +29,18 @@ export function createLimiter({ concurrency = 8, minDelayMs = 0 } = {}) {
       const gap = minDelayMs > 0 ? Math.max(0, lastStart + minDelayMs - Date.now()) : 0;
       lastStart = Date.now() + gap;
       const start = gap > 0 ? delay(gap).then(fn) : (async () => fn())();
-      start.then(resolve, reject).finally(() => { active--; pump(); });
+      start.then(resolve, reject).finally(() => {
+        active--;
+        pump();
+      });
     }
   };
 
-  const run = (fn) => new Promise((resolve, reject) => { waiting.push({ fn, resolve, reject }); pump(); });
+  const run = (fn) =>
+    new Promise((resolve, reject) => {
+      waiting.push({ fn, resolve, reject });
+      pump();
+    });
   run.active = () => active;
   run.pending = () => waiting.length;
   return run;
