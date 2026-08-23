@@ -25,11 +25,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, node: '20', label: 'ubuntu · node 20' }
-          - { os: ubuntu-latest, node: '22', label: 'ubuntu · node 22' }
-          # Windows earns a slot of its own: every portability bug this project
-          # has hit — path handling, shell globbing — showed up there first.
-          - { os: windows-latest, node: '22', label: 'windows · node 22' }
+          - { os: ubuntu-latest, node: '20', label: 'ubuntu · node 20', engines: 'chromium firefox webkit' }
+          - { os: ubuntu-latest, node: '22', label: 'ubuntu · node 22', engines: 'chromium firefox webkit' }
+          # Windows is here for path and platform handling, which is where every
+          # portability bug in this project showed up first. Engine coverage is
+          # the Ubuntu legs' job, so this one runs Chromium alone — Windows
+          # minutes bill at double, and a second copy of the same three engines
+          # buys nothing.
+          - { os: windows-latest, node: '22', label: 'windows · node 22', engines: 'chromium' }
     env:
       # Keep the browsers inside the workspace so one cache path and one key
       # work identically on both runners.
@@ -55,25 +58,37 @@ jobs:
       # --with-deps installs system libraries and is Linux-only.
       - name: Install browsers
         shell: bash
+        env:
+          ENGINES: ${{ matrix.engines }}
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            npx playwright-core install --with-deps chromium firefox webkit
+            npx playwright-core install --with-deps $ENGINES
           else
-            npx playwright-core install chromium firefox webkit
+            npx playwright-core install $ENGINES
           fi
 
-      # The suite skips rather than fails when a browser is missing, so a
-      # broken install would otherwise pass quietly. One run, then insist
-      # nothing was skipped.
+      # The suite skips rather than fails when an engine is missing, so a
+      # broken install would otherwise pass quietly. Skipping an engine this
+      # leg was never asked to run is fine; anything else is not.
       - name: Test
         shell: bash
+        env:
+          ENGINES: ${{ matrix.engines }}
         run: |
+          BROWSER_ENGINES=$(echo "$ENGINES" | tr ' ' ',')
+          export BROWSER_ENGINES
+          echo "engines for this leg: $BROWSER_ENGINES"
+
           set -o pipefail
           npm test 2>&1 | tee test-output.txt
+          set +o pipefail
+
           skipped=$(grep -E '^# skipped' test-output.txt | awk '{print $3}')
-          echo "skipped: ${skipped:-unknown}"
-          if [ "${skipped:-1}" != "0" ]; then
-            echo "::error::${skipped} test(s) skipped - browser coverage did not run"
+          unexpected=$(grep '# SKIP' test-output.txt | grep -vc 'not in BROWSER_ENGINES')
+          echo "skipped: ${skipped:-unknown} (unexpected: ${unexpected:-0})"
+          if [ "${unexpected:-1}" != "0" ]; then
+            echo "::error::${unexpected} test(s) skipped for a reason other than this leg's engine selection"
+            grep '# SKIP' test-output.txt | grep -v 'not in BROWSER_ENGINES' | head -5
             exit 1
           fi
 
