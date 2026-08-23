@@ -25,7 +25,8 @@
     "claim": "node bin/harvest.mjs claim",
     "dashboard": "node bin/harvest.mjs dashboard",
     "test": "node --test test/*.test.mjs",
-    "verify:onchain": "node scripts/verify-onchain.mjs"
+    "verify:onchain": "node scripts/verify-onchain.mjs",
+    "test:browser": "node --test test/browser.test.mjs"
   },
   "keywords": [
     "solana",
@@ -44,6 +45,7 @@
     "@solana/web3.js": "^1.98.0"
   },
   "devDependencies": {
-    "jsdom": "^25.0.1"
+    "jsdom": "^25.0.1",
+    "playwright-core": "1.49"
   }
 }

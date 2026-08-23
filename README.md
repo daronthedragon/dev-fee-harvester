@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-121%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -294,11 +294,19 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                 # 108 tests, no network required
+npm test                 # 121 tests, no network required
+npm run test:browser     # just the browser tests
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 
-The dashboard is covered too: `test/dashboard.test.mjs` loads `web/index.html` in jsdom exactly as the server serves it and drives the real script, stubbing only `fetch`. Both bugs that reached this README before the tests did — "hide empty" swallowing sharing rows, and an expand/collapse that was documented but never built — fail the suite if reintroduced.
+The dashboard is covered at two levels, both against `web/index.html` exactly as the server serves it — same file, same placeholders — with only the API stubbed.
+
+- **`test/dashboard.test.mjs`** runs the page in jsdom and drives the real script: rendering, filtering, the share disclosure, selection, what Simulate posts, the execute guard.
+- **`test/browser.test.mjs`** runs it in a real browser through Playwright, for the things jsdom has no answer for: horizontal overflow, whether the toolbar wraps, whether the dark and light palettes actually apply, and whether the disclosure can be worked by keyboard alone.
+
+The browser tests use whatever Chromium-based browser is already installed and download nothing. With none available they skip rather than fail, so `npm test` stays green anywhere; `NO_BROWSER_TESTS=1` skips them deliberately.
+
+Every bug in this list reached the published README before a test did, and each one now fails the suite if reintroduced: "hide empty" swallowing sharing rows, an expand/collapse that was documented but never built, and a toolbar that wrapped at narrower widths.
 
 ## License
 
