@@ -53,8 +53,17 @@ function buildRow(wallet, vaultInfo, ataInfo, selfInfo) {
   };
 }
 
-/** Anything worth carrying forward out of a scan. */
-const hasFees = (row) => row.totalLamports > 0 || row.selfConfigDistributable > 0;
+/**
+ * Anything worth carrying forward out of a scan.
+ *
+ * Distributions count. A wallet that is only a shareholder somewhere else has
+ * no balance of its own, so judging it on totalLamports alone would discard
+ * precisely the wallets the shareholder sweep exists to find.
+ */
+const hasFees = (row) =>
+  row.totalLamports > 0
+  || row.selfConfigDistributable > 0
+  || (row.distributions ?? []).some((d) => d.distributable > 0);
 
 /**
  * Scan one batch of wallets, issuing its account lookups concurrently.
@@ -97,6 +106,7 @@ export async function* scanStream(walletBatches, connection, options = {}) {
     onProgress,
     onRetry,
     onRow,
+    enrich,
     workers = 0,
     derivePool,
   } = options;
@@ -114,7 +124,11 @@ export async function* scanStream(walletBatches, connection, options = {}) {
 
   try {
   for await (const wallets of walletBatches) {
-    const rows = await scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool });
+    let rows = await scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool });
+    // Enrichment runs before the filter, and per batch, so work that depends
+    // on a wallet having no balance of its own still sees it — while memory
+    // stays bounded to one batch.
+    if (enrich) rows = await enrich(rows);
     scanned += wallets.length;
     const kept = [];
     for (const row of rows) {

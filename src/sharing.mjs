@@ -10,6 +10,7 @@ import {
 } from './constants.mjs';
 import { bondingCurve, eventAuthority, pumpCreatorVault, sharingConfig } from './pda.mjs';
 import { encodeBase58 } from './base58.mjs';
+import { createLimiter } from './limit.mjs';
 
 /**
  * Fee sharing.
@@ -121,7 +122,10 @@ export async function loadSharingConfigAt(connection, address) {
  * each returns almost nothing unless it matches.
  */
 export async function findConfigsForShareholder(connection, wallet, options = {}) {
-  const { slots = SHAREHOLDER_SLOTS, concurrency = 6, attempts = 4 } = options;
+  // These are the heaviest requests the tool makes and public endpoints
+  // throttle them hard, so the sweep is deliberately more patient than the
+  // account lookups: six attempts backing off from half a second.
+  const { slots = SHAREHOLDER_SLOTS, concurrency = 6, attempts = 6, baseDelayMs = 500, limiter } = options;
   const discFilter = { memcmp: { offset: 0, bytes: encodeBase58(SHARING_CONFIG_DISCRIMINATOR) } };
 
   const querySlot = async (i) => {
@@ -134,7 +138,7 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
         });
       } catch (err) {
         lastError = err;
-        await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+        await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** attempt));
       }
     }
     // Never swallow this. A rate-limited slot that quietly returns nothing
@@ -143,20 +147,18 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
   };
 
   // Bounded concurrency: firing all 27 slots at once is what provokes the
-  // rate limiting in the first place.
+  // rate limiting in the first place. A caller-supplied limiter takes over
+  // when there is one, so `--rpc-delay` reaches these requests too — they are
+  // by far the heaviest thing this tool asks an RPC for.
+  const gate = limiter ?? createLimiter({ concurrency });
   const seen = new Map();
-  const queue = Array.from({ length: slots }, (_, i) => i);
-  const worker = async () => {
-    for (;;) {
-      const i = queue.shift();
-      if (i === undefined) return;
-      for (const acc of await querySlot(i)) {
-        const key = acc.pubkey.toBase58();
-        if (!seen.has(key)) seen.set(key, decodeSharingConfig(acc.pubkey, acc.account.data));
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, slots) }, worker));
+  const results = await Promise.all(
+    Array.from({ length: slots }, (_, i) => gate(() => querySlot(i))),
+  );
+  for (const acc of results.flat()) {
+    const key = acc.pubkey.toBase58();
+    if (!seen.has(key)) seen.set(key, decodeSharingConfig(acc.pubkey, acc.account.data));
+  }
   return [...seen.values()];
 }
 
@@ -194,7 +196,7 @@ export const configForMint = (mint) => sharingConfig(mint);
  * Shareholder discovery costs one filtered request per shareholder slot, so it
  * stays behind a flag rather than being paid for on every scan.
  */
-export async function attachDistributions(connection, rows, { findShares = false, concurrency = 2, onProgress } = {}) {
+export async function attachDistributions(connection, rows, { findShares = false, concurrency = 2, onProgress, limiter } = {}) {
   const out = rows.map((r) => ({ ...r, distributions: [], sharingLamports: 0 }));
 
   // Two wallets can be shareholders of one config. Emitting the crank twice in
@@ -224,7 +226,7 @@ export async function attachDistributions(connection, rows, { findShares = false
         if (!next) return;
         const [, row] = next;
         try {
-          const configs = await findConfigsForShareholder(connection, row.publicKey);
+          const configs = await findConfigsForShareholder(connection, row.publicKey, { limiter });
           const withBalances = await withVaultBalances(connection, configs);
           for (const cfg of withBalances) {
             if (cfg.distributable <= 0) continue;

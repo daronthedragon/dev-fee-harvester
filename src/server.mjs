@@ -19,7 +19,13 @@ import { attachDistributions } from './sharing.mjs';
  */
 export async function startDashboard({ walletsPath, rpc, port = 4600, allowExecute = false, findShares = false }) {
   const token = randomBytes(24).toString('hex');
-  const connection = new Connection(rpc, 'confirmed');
+  const connection = new Connection(rpc, {
+    commitment: 'confirmed',
+    // web3.js retries rate limits itself and logs a line per attempt, which
+    // duplicates the backoff in limit.mjs and buries real output under
+    // "Retrying after ...". Ours reports through the progress line instead.
+    disableRetryOnRateLimit: true,
+  });
   const wallets = await loadWallets(walletsPath);
   const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
 

@@ -10,6 +10,7 @@ import { canSign, streamWallets } from '../src/keys.mjs';
 import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
 import { defaultWorkerCount } from '../src/derive.mjs';
+import { createLimiter } from '../src/limit.mjs';
 import { attachDistributions } from '../src/sharing.mjs';
 import { multiSelect } from '../src/select.mjs';
 import { startDashboard } from '../src/server.mjs';
@@ -64,7 +65,13 @@ const die = (msg) => { console.error(c.red(`error: ${msg}`)); process.exit(1); }
 async function loadAndScan(args, { requireSigner = false } = {}) {
   const walletsPath = args.wallets ?? process.env.WALLETS ?? './wallets.json';
   const rpc = args.rpc ?? process.env.RPC ?? 'https://api.mainnet-beta.solana.com';
-  const connection = new Connection(rpc, 'confirmed');
+  const connection = new Connection(rpc, {
+    commitment: 'confirmed',
+    // web3.js retries rate limits itself and logs a line per attempt, which
+    // duplicates the backoff in limit.mjs and buries real output under
+    // "Retrying after ...". Ours reports through the progress line instead.
+    disableRetryOnRateLimit: true,
+  });
   const wanted = typeof args.payer === 'string' ? args.payer : null;
   const minLamports = Number(args.min ?? 0) * LAMPORTS_PER_SOL;
 
@@ -92,10 +99,25 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     }
   };
 
+  // Same pacing as the scan: the shareholder sweep is the heaviest set of
+  // requests here, so --concurrency and --rpc-delay must reach it too.
+  const shareLimiter = createLimiter({
+    concurrency: Number(args.concurrency ?? 8),
+    minDelayMs: Number(args['rpc-delay'] ?? 0),
+  });
+
   let rows = [];
   let retries = 0;
   try {
     for await (const chunk of scanStream(batches, connection, {
+      // Distributions are attached inside the stream: a wallet that only holds
+      // a share elsewhere has no balance of its own, so attaching afterwards
+      // would run only on wallets that had already survived the filter.
+      enrich: (batch) => attachDistributions(connection, batch, {
+        findShares: Boolean(args['find-shares']),
+        limiter: shareLimiter,
+        onProgress: (n, total) => progress(`shareholder scan ${count(n)}/${count(total)}`),
+      }),
       workers: args.workers === undefined ? defaultWorkerCount() : Number(args.workers),
       concurrency: Number(args.concurrency ?? 8),
       minDelayMs: Number(args['rpc-delay'] ?? 0),
@@ -144,12 +166,6 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     clearProgress();
     rows = rows.map((r) => ({ ...r, totalLamports: r.totalLamports + (r.bagsLamports ?? 0) }));
   }
-
-  rows = await attachDistributions(connection, rows, {
-    findShares: Boolean(args['find-shares']),
-    onProgress: (n, total) => progress(`shareholder scan ${n}/${total}`),
-  });
-  clearProgress();
 
   if (!args['no-preflight']) {
     const withFees = rows.filter(isActionable);

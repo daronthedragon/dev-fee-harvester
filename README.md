@@ -8,7 +8,7 @@ Finds the fees scattered across your dev wallets, tells you exactly what is clai
 and drains them in batched transactions instead of one transaction per wallet.
 
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -168,13 +168,13 @@ Two consequences, both of which cost money if ignored.
 
 **Those fees are invisible to a per-wallet scan.** The vault is not derived from any wallet you hold, so a normal scan reports zero while real SOL sits in a vault that names you as a shareholder. `--find-shares` hunts for configs where one of your wallets is a shareholder:
 
-```
-shareholder 5bQMLqKtmi…      0.000000     0.000000     3.573280     3.573280  ready
-    └ share in Hzm2XygHVB… · crank 0.746627 SOL to 3 shareholders  → you receive 0.253853 SOL
-    └ share in HssQnt18Qz… · crank 2.669687 SOL to 1 shareholder   → you receive 2.669687 SOL
-```
+<div align="center">
+  <img src="assets/shares.gif" width="900" alt="The same two wallets scanned twice. Without --find-shares the total is 0.018161 SOL and one wallet is listed. With the flag a second wallet appears holding fourteen shares in other creators fee-sharing configs, each line showing what the crank releases and what this wallet receives, for a total of 3.744895 SOL">
+</div>
 
-That wallet reads **0.000000 SOL** without the flag and **3.573280 SOL** with it.
+<sub>The same wallets, scanned twice. The second wallet is invisible to the first scan.</sub>
+
+That run went from **0.018161 SOL** to **3.744895 SOL** — a wallet holding shares in fourteen other creators' configs, none of which shows up as a balance anywhere.
 
 **Releasing them is a different instruction.** `distribute_creator_fees` splits the vault across the config's shareholders by basis points. It takes **no signer** — anyone may crank it, and funds can only ever reach the shareholders the config already names, so cranking someone else's config gains you nothing.
 
@@ -284,7 +284,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                 # 70 tests, no network required
+npm test                 # 76 tests, no network required
 npm run verify:onchain   # re-derive every constant from the on-chain IDLs
 ```
 

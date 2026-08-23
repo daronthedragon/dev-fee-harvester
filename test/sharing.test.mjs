@@ -7,8 +7,9 @@ import {
 } from '../src/constants.mjs';
 import {
   SHAREHOLDER_SLOTS, decodeSharingConfig, distributeCreatorFeesIx, distributableLamports,
-  isSharingConfig, shareFor,
+  findConfigsForShareholder, isSharingConfig, shareFor,
 } from '../src/sharing.mjs';
+import { createLimiter } from '../src/limit.mjs';
 import { bondingCurve, pumpCreatorVault, sharingConfig } from '../src/pda.mjs';
 import { packBatches, workItems } from '../src/claim.mjs';
 
@@ -153,4 +154,43 @@ test('a wallet with many distributions spreads across transactions', () => {
     assert.ok(!b.oversized, 'no single crank should be too large to send');
   }
   assert.equal(batches.reduce((n, b) => n + b.items.length, 0), 13, 'no distribution dropped');
+});
+
+test('the shareholder sweep queries every slot through the supplied limiter', async () => {
+  // --rpc-delay must reach these requests: 27 filtered getProgramAccounts per
+  // wallet is the heaviest thing this tool asks an RPC for, and firing them
+  // unpaced is what earns a 429.
+  const offsets = [];
+  let inFlight = 0;
+  let peak = 0;
+  const connection = {
+    async getProgramAccounts(_program, { filters }) {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      offsets.push(filters[1].memcmp.offset);
+      await new Promise((r) => setTimeout(r, 3));
+      inFlight--;
+      return [];
+    },
+  };
+
+  const limiter = createLimiter({ concurrency: 2 });
+  const wallet = Keypair.generate().publicKey;
+  const found = await findConfigsForShareholder(connection, wallet, { limiter });
+
+  assert.deepEqual(found, [], 'no configs matched the stub');
+  assert.equal(offsets.length, SHAREHOLDER_SLOTS, 'every shareholder slot is probed');
+  assert.ok(peak <= 2, `limiter breached: peak concurrency ${peak}`);
+  // Slots are the fixed strides the shareholder array occupies.
+  assert.deepEqual([...offsets].sort((a, b) => a - b),
+    Array.from({ length: SHAREHOLDER_SLOTS }, (_, i) => 80 + i * 34));
+});
+
+test('a slot that keeps failing throws instead of reporting no fees', async () => {
+  const connection = { async getProgramAccounts() { throw new Error('429 Too Many Requests'); } };
+  await assert.rejects(
+    () => findConfigsForShareholder(connection, Keypair.generate().publicKey,
+      { limiter: createLimiter({ concurrency: 4 }), attempts: 2 }),
+    /shareholder slot \d+ failed after 2 attempts/,
+  );
 });
