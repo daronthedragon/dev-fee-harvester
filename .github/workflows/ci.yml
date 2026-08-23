@@ -47,13 +47,27 @@ jobs:
 
       - run: npm ci
 
+      # Derived from matrix.engines rather than repeated as its own matrix
+      # field, so the cache key cannot drift from what actually gets installed.
+      - name: Derive browser cache key
+        shell: bash
+        env:
+          ENGINES: ${{ matrix.engines }}
+        run: echo "ENGINE_KEY=$(echo "$ENGINES" | tr ' ' '-')" >> "$GITHUB_ENV"
+
       # Playwright's Firefox and WebKit builds are ~105MB and change only with
-      # the playwright-core version, so they are worth caching.
+      # the playwright-core version, so they are worth caching. The engine list
+      # is part of the key: without it a leg that runs one engine restores, and
+      # then re-saves, whatever some other leg happened to install.
       - name: Cache browsers
         uses: actions/cache@v5
         with:
           path: pw-browsers
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ env.ENGINE_KEY }}-${{ hashFiles('package-lock.json') }}
+          # A lockfile bump should top up the existing browsers, not refetch
+          # every one of them. Scoped to the same engine list.
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ env.ENGINE_KEY }}-
 
       # --with-deps installs system libraries and is Linux-only.
       - name: Install browsers
