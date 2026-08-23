@@ -27,6 +27,8 @@
     "test": "node --test",
     "test:browser": "node --test test/browser.test.mjs",
     "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "browsers:install": "playwright-core install firefox webkit",
     "verify:onchain": "node scripts/verify-onchain.mjs"
   },
@@ -51,6 +53,7 @@
     "eslint-plugin-html": "^8.1.4",
     "globals": "^17.11.0",
     "jsdom": "^25.0.1",
-    "playwright-core": "1.49"
+    "playwright-core": "1.49",
+    "prettier": "^3.9.6"
   }
 }
