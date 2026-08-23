@@ -19,12 +19,21 @@ concurrency:
 
 jobs:
   test:
-    name: tests · node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    name: tests · ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        include:
+          - { os: ubuntu-latest, node: '20', label: 'ubuntu · node 20' }
+          - { os: ubuntu-latest, node: '22', label: 'ubuntu · node 22' }
+          # Windows earns a slot of its own: every portability bug this project
+          # has hit — path handling, shell globbing — showed up there first.
+          - { os: windows-latest, node: '22', label: 'windows · node 22' }
+    env:
+      # Keep the browsers inside the workspace so one cache path and one key
+      # work identically on both runners.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/pw-browsers
     steps:
       - uses: actions/checkout@v5
 
@@ -38,14 +47,20 @@ jobs:
       # Playwright's Firefox and WebKit builds are ~105MB and change only with
       # the playwright-core version, so they are worth caching.
       - name: Cache browsers
-        id: browsers
         uses: actions/cache@v5
         with:
-          path: ~/.cache/ms-playwright
+          path: pw-browsers
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
+      # --with-deps installs system libraries and is Linux-only.
       - name: Install browsers
-        run: npx playwright-core install --with-deps chromium firefox webkit
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            npx playwright-core install --with-deps chromium firefox webkit
+          else
+            npx playwright-core install chromium firefox webkit
+          fi
 
       # The suite skips rather than fails when a browser is missing, so a
       # broken install would otherwise pass quietly. One run, then insist
@@ -61,23 +76,6 @@ jobs:
             echo "::error::${skipped} test(s) skipped - browser coverage did not run"
             exit 1
           fi
-
-  windows:
-    name: tests · windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      # No browsers here: this job is about path and platform handling, which
-      # is where this project has actually been bitten before.
-      - name: Test
-        run: npm test
-        env:
-          NO_BROWSER_TESTS: '1'
 
   onchain:
     name: on-chain constants

@@ -4,3 +4,5 @@ node_modules/
 wallets.json
 wallets/
 .env
+pw-browsers/
+test-output.txt
