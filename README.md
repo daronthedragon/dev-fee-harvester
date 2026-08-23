@@ -78,7 +78,11 @@ node bin/harvest.mjs claim --all --execute --priority-fee 50000
 node bin/harvest.mjs dashboard
 ```
 
-The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan.
+<div align="center">
+  <img src="assets/dashboard.gif" width="900" alt="The dashboard listing five wallets with their pump.fun, PumpSwap and fee-sharing balances; the select-all, select-none and select-claimable buttons are clicked in turn and the running total updates to match the selection">
+</div>
+
+The same thing with checkboxes: a live running total, select-all / select-claimable, per-wallet status, and every transaction linked to Solscan. Sharing-config rows expand to show what the crank releases and how much of it reaches you.
 
 It binds to `127.0.0.1` only and every API call carries a token minted at startup, because this process holds signing keys — an open port must not be enough to drive a claim. Also dry-run unless started with `--execute`.
 
