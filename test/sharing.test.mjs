@@ -289,20 +289,48 @@ test('a slot that keeps failing throws instead of reporting no fees', async () =
 function chainWith(configs) {
   const byAddress = new Map(configs.map((c) => [c.address.toBase58(), c.data]));
   const calls = { getProgramAccounts: 0, getMultipleAccountsInfo: 0 };
+
+  // A real JSON-RPC body, delivered in small chunks, so the streaming parser
+  // is what gets exercised — including entries split across chunk boundaries.
+  const fetchImpl = async (_url, init) => {
+    calls.getProgramAccounts++;
+    const { dataSlice } = JSON.parse(init.body).params[1];
+    // pubkey before account, as mainnet actually emits it.
+    const value = configs.map((c) => ({
+      pubkey: c.address.toBase58(),
+      account: {
+        lamports: 1,
+        data: [
+          (dataSlice
+            ? c.data.subarray(dataSlice.offset, dataSlice.offset + dataSlice.length)
+            : c.data
+          ).toString('base64'),
+          'base64',
+        ],
+        owner: PUMP_FEES_PROGRAM.toBase58(),
+        executable: false,
+        rentEpoch: 0,
+        space: c.data.length,
+      },
+    }));
+    const text = JSON.stringify({ jsonrpc: '2.0', result: value, id: 1 });
+    const bytes = Buffer.from(text, 'utf8');
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return text;
+      },
+      body: (async function* () {
+        for (let i = 0; i < bytes.length; i += 17) yield bytes.subarray(i, i + 17);
+      })(),
+    };
+  };
+
   return {
     calls,
-    async getProgramAccounts(_program, { dataSlice }) {
-      calls.getProgramAccounts++;
-      return configs.map((c) => ({
-        pubkey: c.address,
-        account: {
-          data: dataSlice
-            ? c.data.subarray(dataSlice.offset, dataSlice.offset + dataSlice.length)
-            : c.data,
-          owner: PUMP_FEES_PROGRAM,
-        },
-      }));
-    },
+    fetchImpl,
+    rpcEndpoint: 'http://stub.invalid',
     async getMultipleAccountsInfo(addresses) {
       calls.getMultipleAccountsInfo++;
       return addresses.map((a) => {
@@ -324,7 +352,7 @@ test('the index finds a wallet sitting in the first slot', async () => {
     configWith([{ address: me, bps: 10000 }]),
     configWith([{ address: Keypair.generate().publicKey, bps: 10000 }]),
   ]);
-  const index = await buildShareholderIndex(chain, [me]);
+  const index = await buildShareholderIndex(chain, [me], { fetchImpl: chain.fetchImpl });
   assert.equal(index.get(me.toBase58())?.length, 1);
 });
 
@@ -341,14 +369,16 @@ test('the index finds a wallet past the inlined slots', async () => {
   deep[5] = { address: me, bps: 5000 };
   const chain = chainWith([configWith(deep)]);
 
-  const index = await buildShareholderIndex(chain, [me]);
+  const index = await buildShareholderIndex(chain, [me], { fetchImpl: chain.fetchImpl });
   assert.equal(index.get(me.toBase58())?.length, 1, 'found despite sitting in slot 6');
   assert.equal(index.get(me.toBase58())[0].shareholders.length, 6, 'full record, not the slice');
 });
 
 test('a wallet that holds no shares gets nothing', async () => {
   const chain = chainWith([configWith([{ address: Keypair.generate().publicKey, bps: 10000 }])]);
-  const index = await buildShareholderIndex(chain, [Keypair.generate().publicKey]);
+  const index = await buildShareholderIndex(chain, [Keypair.generate().publicKey], {
+    fetchImpl: chain.fetchImpl,
+  });
   assert.equal(index.size, 0);
 });
 
@@ -364,7 +394,7 @@ test('the configs are read once however many wallets are asked about', async () 
     configWith([{ address: wallets[99], bps: 10000 }]),
   ]);
 
-  const index = await buildShareholderIndex(chain, wallets);
+  const index = await buildShareholderIndex(chain, wallets, { fetchImpl: chain.fetchImpl });
   assert.equal(chain.calls.getProgramAccounts, 1, 'one pass over the configs');
   assert.equal(index.get(wallets[0].toBase58())?.length, 1);
   assert.equal(index.get(wallets[1].toBase58())?.length, 1);
@@ -381,13 +411,13 @@ test('one wallet holding several shares collects them all', async () => {
     ]),
     configWith([{ address: Keypair.generate().publicKey, bps: 10000 }]),
   ]);
-  const index = await buildShareholderIndex(chain, [me]);
+  const index = await buildShareholderIndex(chain, [me], { fetchImpl: chain.fetchImpl });
   assert.equal(index.get(me.toBase58())?.length, 2);
 });
 
 test('asking about no wallets does not read the chain at all', async () => {
   const chain = chainWith([configWith([{ address: Keypair.generate().publicKey, bps: 10000 }])]);
-  const index = await buildShareholderIndex(chain, []);
+  const index = await buildShareholderIndex(chain, [], { fetchImpl: chain.fetchImpl });
   assert.equal(index.size, 0);
   assert.equal(chain.calls.getProgramAccounts, 0);
 });

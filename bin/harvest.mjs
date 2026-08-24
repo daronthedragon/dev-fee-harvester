@@ -48,8 +48,8 @@ ${c.bold('Options')}
   --out <file.jsonl>   append every wallet found with fees, as it is found
   --no-preflight       skip the per-wallet simulation pass
   --find-shares        also hunt fees held for you in team sharing configs (slower)
-  --share-index        with --find-shares: read every config once instead of 27
-                       requests per wallet. Far fewer calls, ~1.2GB peak
+  --no-share-index     with --find-shares: probe 27 slots per wallet instead of
+                       reading the configs once (slower; the old behaviour)
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
                        note: authenticated responses are not yet confirmed live
   --port <n>           dashboard port (default 4600)
@@ -134,11 +134,11 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     minDelayMs: Number(args['rpc-delay'] ?? 0),
   });
 
-  // One read of every sharing config, answering all wallets, instead of 27
-  // filtered requests each. Explicit because pass A parses every config on
-  // the chain and peaks around 1.2GB.
+  // One streamed read of every sharing config, answering all wallets, instead
+  // of 27 filtered requests each. On by default: it is faster even for a
+  // single wallet, and the stream keeps it to tens of megabytes.
   let shareIndex;
-  if (args['find-shares'] && args['share-index']) {
+  if (args['find-shares'] && !args['no-share-index']) {
     try {
       shareIndex = await buildShareholderIndex(connection, await collectWallets(walletsPath), {
         limiter: shareLimiter,

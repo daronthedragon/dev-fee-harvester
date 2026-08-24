@@ -11,6 +11,7 @@ import {
 import { bondingCurve, eventAuthority, pumpCreatorVault } from './pda.mjs';
 import { encodeBase58 } from './base58.mjs';
 import { createLimiter, delay, withRetry } from './limit.mjs';
+import { streamProgramAccounts } from './rpc-stream.mjs';
 
 /**
  * Fee sharing.
@@ -193,8 +194,8 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
  * slice covers is picked up rather than missed. Nothing here assumes the
  * current maximum (10) will hold.
  *
- * The cost is memory: pass A parses every config on the chain, which peaks
- * around 1.2GB. That is why this is a choice rather than the default.
+ * Pass A is streamed rather than collected, so memory tracks one entry
+ * rather than the size of the whole result.
  */
 const INLINE_SLOTS = 2;
 
@@ -214,7 +215,7 @@ function readShareholders(data, offsetOfLength, available) {
 }
 
 export async function buildShareholderIndex(connection, wallets, options = {}) {
-  const { onProgress, limiter } = options;
+  const { onProgress, limiter, fetchImpl } = options;
   const wanted = new Set(wallets.map((w) => (w.publicKey ?? w).toBase58()));
   const index = new Map();
   if (wanted.size === 0) return index;
@@ -225,33 +226,32 @@ export async function buildShareholderIndex(connection, wallets, options = {}) {
   };
 
   onProgress?.({ phase: 'scan-configs' });
-  const summaries = await run(() =>
+  const hits = new Set();
+  const overflow = [];
+
+  // Streamed, not collected: every config on the chain passes through here and
+  // only the few that matter are kept.
+  const scanned = await run(() =>
     withRetry(
       () =>
-        connection.getProgramAccounts(PUMP_FEES_PROGRAM, {
+        streamProgramAccounts(connection.rpcEndpoint, PUMP_FEES_PROGRAM, {
           commitment: 'confirmed',
+          ...(fetchImpl ? { fetchImpl } : {}),
           filters: [discFilter],
           dataSlice: {
             offset: SHAREHOLDERS_OFFSET - 4,
             length: 4 + INLINE_SLOTS * SHAREHOLDER_SIZE,
           },
+          onAccount: ({ pubkey, data }) => {
+            const { count, shareholders } = readShareholders(data, 0, INLINE_SLOTS);
+            if (count > INLINE_SLOTS) overflow.push(new PublicKey(pubkey));
+            if (shareholders.some((sh) => wanted.has(sh.address.toBase58()))) hits.add(pubkey);
+          },
         }),
       { attempts: 4, baseDelayMs: 1000 },
     ),
   );
-
-  const hits = new Set();
-  const overflow = [];
-  for (const acc of summaries) {
-    const { count, shareholders } = readShareholders(acc.account.data, 0, INLINE_SLOTS);
-    if (count > INLINE_SLOTS) overflow.push(acc.pubkey);
-    if (shareholders.some((sh) => wanted.has(sh.address.toBase58())))
-      hits.add(acc.pubkey.toBase58());
-  }
-  onProgress?.({ phase: 'scanned', configs: summaries.length, overflow: overflow.length });
-
-  // Let the summaries go before pulling anything else in.
-  summaries.length = 0;
+  onProgress?.({ phase: 'scanned', configs: scanned, overflow: overflow.length });
 
   // Pass B: the tail whose shareholders the slice could not reach.
   const overflowConfigs = await fetchConfigs(connection, overflow, run);
