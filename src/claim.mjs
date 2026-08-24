@@ -168,6 +168,120 @@ function finalise(batch) {
   return { ...batch, rows, lamports: batch.items.reduce((n, i) => n + i.lamports, 0) };
 }
 
+/** Errors that mean the transaction never made it onto the chain. */
+function isExpiry(err) {
+  const m = String(err?.message ?? err);
+  return (
+    /blockhash not found/i.test(m) ||
+    /block height exceeded/i.test(m) ||
+    err?.name === 'TransactionExpiredBlockheightExceededError'
+  );
+}
+
+/**
+ * Ask the chain what actually happened to a signature.
+ *
+ * Returns `landed` when the transaction is on the chain, `failed` when it is
+ * on the chain and reverted, and `absent` when it is not there at all.
+ */
+async function outcomeOf(connection, signature) {
+  if (typeof connection.getSignatureStatus !== 'function') return { state: 'absent' };
+  try {
+    const { value } = await connection.getSignatureStatus(signature, {
+      searchTransactionHistory: true,
+    });
+    if (!value) return { state: 'absent' };
+    if (value.err) return { state: 'failed', err: value.err };
+    return { state: 'landed' };
+  } catch {
+    // The lookup itself failing tells us nothing about the transaction, and
+    // guessing here is how a landed claim gets reported as lost.
+    return { state: 'unknown' };
+  }
+}
+
+/**
+ * Send one batch, and keep sending it until it lands or is genuinely dead.
+ *
+ * Two things make this more than a retry loop.
+ *
+ * Every attempt takes a *fresh* blockhash. Signing a whole run against a
+ * single blockhash caps the run at that blockhash's lifetime — about 150
+ * slots, a minute or so — after which every remaining transaction is rejected
+ * no matter how many wallets are left to claim. Refetching per attempt is what
+ * lets a claim run be as long as the wallet list.
+ *
+ * And a confirmation that times out is never reported as a failure until the
+ * chain has been asked. Expiry while waiting means we stopped watching, not
+ * that the money stayed put; a transaction can confirm after the client has
+ * given up. Retrying without checking is how a claim gets sent twice, and
+ * reporting without checking is how a successful claim is recorded as lost.
+ */
+async function sendBatch(connection, batch, payerWallet, { attempts = 3, onAttempt } = {}) {
+  let lastErr;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    const tx = compile(payerWallet.publicKey, blockhash, batch.instructions);
+
+    // Deduplicate signers: the payer may also be one of the harvested wallets.
+    // Derive signing keys only for the wallets in this one transaction.
+    const signers = new Map();
+    if (canSign(payerWallet)) signers.set(payerWallet.publicKey.toBase58(), signerFor(payerWallet));
+    for (const item of batch.items) {
+      if (item.signerWallet) signers.set(item.signerKey.toBase58(), signerFor(item.signerWallet));
+    }
+    if (signers.size > 0) tx.sign([...signers.values()]);
+
+    let signature;
+    try {
+      signature = await connection.sendTransaction(tx, { maxRetries: 5 });
+    } catch (err) {
+      lastErr = err;
+      // Nothing was accepted, so there is no signature to double-spend with.
+      if (isExpiry(err) && attempt < attempts) {
+        onAttempt?.({ attempt, reason: 'blockhash expired before the send was accepted' });
+        continue;
+      }
+      throw err;
+    }
+
+    try {
+      await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed',
+      );
+      return { signature, attempts: attempt };
+    } catch (err) {
+      const outcome = await outcomeOf(connection, signature);
+      if (outcome.state === 'landed') return { signature, attempts: attempt };
+      if (outcome.state === 'failed') {
+        throw Object.assign(new Error(`transaction reverted: ${JSON.stringify(outcome.err)}`), {
+          signature,
+        });
+      }
+      if (outcome.state === 'unknown') {
+        // Neither confirmed nor disproved. Resending could claim twice, so
+        // stop and hand back the signature to be checked by hand.
+        throw Object.assign(
+          new Error(`could not determine the outcome; check signature ${signature}`),
+          { signature, indeterminate: true },
+        );
+      }
+      // Absent, with the blockhash expired: this one can never land, so
+      // sending again cannot duplicate it.
+      lastErr = Object.assign(err, { signature });
+      if (attempt < attempts) {
+        onAttempt?.({ attempt, signature, reason: 'not confirmed in time, and never landed' });
+        continue;
+      }
+      throw lastErr;
+    }
+  }
+
+  throw lastErr;
+}
+
 /**
  * Build, sign and send (or simulate) the batches.
  *
@@ -180,6 +294,7 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
     computeUnitPrice = 0,
     maxPerTx = 8,
     quoteMint = WSOL_MINT,
+    sendAttempts = 3,
     onEvent = () => {},
   } = options;
 
@@ -206,8 +321,9 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
 
   const usable = rows.filter((r) => (r.status ?? 'ready') === 'ready');
   const items = usable.flatMap((r) => workItems(r, payerWallet.publicKey, quoteMint));
-
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  // Packing only needs a blockhash to measure against; every blockhash is the
+  // same 32 bytes, so the one used for sizing need not be the one signed.
+  const { blockhash } = await connection.getLatestBlockhash();
   const batches = packBatches(items, payerWallet.publicKey, {
     blockhash,
     computeUnitPrice,
@@ -225,59 +341,49 @@ export async function claimAll(connection, rows, payerWallet, options = {}) {
   for (const [i, batch] of batches.entries()) {
     const label = `batch ${i + 1}/${batches.length} (${batch.items.length} action${batch.items.length === 1 ? '' : 's'})`;
     const { lamports } = batch;
+    const wallets = batch.items.map((i2) => i2.label);
     try {
-      const tx = compile(payerWallet.publicKey, blockhash, batch.instructions);
-      // Deduplicate signers: the payer may also be one of the harvested wallets.
-      // Derive signing keys only for the wallets in this one transaction, and
-      // only for keys we actually hold — a dry run may hold none.
-      const signers = new Map();
-      if (canSign(payerWallet))
-        signers.set(payerWallet.publicKey.toBase58(), signerFor(payerWallet));
-      for (const item of batch.items) {
-        if (item.signerWallet) signers.set(item.signerKey.toBase58(), signerFor(item.signerWallet));
-      }
-      if (signers.size > 0) tx.sign([...signers.values()]);
-
       if (dryRun) {
+        const tx = compile(payerWallet.publicKey, blockhash, batch.instructions);
         const sim = await connection.simulateTransaction(tx, {
           replaceRecentBlockhash: true,
           sigVerify: false,
         });
         const ok = sim.value.err === null;
-        results.push({
+        const result = {
           label,
           ok,
           lamports,
-          wallets: batch.items.map((i2) => i2.label),
+          wallets,
           err: sim.value.err,
           logs: sim.value.logs,
           simulated: true,
-        });
-        onEvent({ type: 'batch', label, ok, lamports, simulated: true, err: sim.value.err });
+        };
+        results.push(result);
+        onEvent({ type: 'batch', ...result });
       } else {
-        const signature = await connection.sendTransaction(tx, { maxRetries: 5 });
-        await connection.confirmTransaction(
-          { signature, blockhash, lastValidBlockHeight },
-          'confirmed',
-        );
-        results.push({
-          label,
-          ok: true,
-          lamports,
-          wallets: batch.items.map((i2) => i2.label),
-          signature,
+        const { signature, attempts } = await sendBatch(connection, batch, payerWallet, {
+          attempts: sendAttempts,
+          onAttempt: ({ attempt, reason }) => onEvent({ type: 'retry', label, attempt, reason }),
         });
-        onEvent({ type: 'batch', label, ok: true, lamports, signature });
+        const result = { label, ok: true, lamports, wallets, signature, attempts };
+        results.push(result);
+        onEvent({ type: 'batch', ...result });
       }
     } catch (err) {
-      results.push({
+      // The signature is carried on the error precisely so a batch that may
+      // have moved money is never reported without a way to look it up.
+      const result = {
         label,
         ok: false,
         lamports,
-        wallets: batch.items.map((i2) => i2.label),
+        wallets,
         err: err.message,
-      });
-      onEvent({ type: 'batch', label, ok: false, lamports, err: err.message });
+        ...(err.signature ? { signature: err.signature } : {}),
+        ...(err.indeterminate ? { indeterminate: true } : {}),
+      };
+      results.push(result);
+      onEvent({ type: 'batch', ...result });
     }
   }
   return results;

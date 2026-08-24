@@ -46,6 +46,7 @@ ${c.bold('Options')}
   --workers <n>        threads for address derivation (default: cores-1, max 8; 0 = off)
   --rpc-delay <ms>     minimum gap between RPC requests, for strict rate limits
   --out <file.jsonl>   append every wallet found with fees, as it is found
+  --receipts <file>    append a JSONL record of every transaction as it is sent
   --no-preflight       skip the per-wallet simulation pass
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --no-share-index     with --find-shares: probe 27 slots per wallet instead of
@@ -395,6 +396,16 @@ async function main() {
       `\n${dryRun ? c.yellow('DRY RUN') : c.red(c.bold('EXECUTING'))} · ${chosen.length} wallet(s) · ${c.bold(sol(total))} SOL · fee payer ${c.cyan(payer.label)}\n`,
     );
 
+    // Real money moves here, so the record of it is written as it happens
+    // rather than at the end. A run that is interrupted halfway still leaves
+    // behind every signature it sent.
+    const receiptPath = args.receipts;
+    const receipts = receiptPath ? createWriteStream(receiptPath, { flags: 'a' }) : null;
+    // Simulation logs are for reading on screen, not for a durable record of
+    // what moved. Keep the receipt to the facts of the transaction.
+    const record = ({ logs: _logs, ...event }) =>
+      receipts?.write(`${JSON.stringify({ ts: Date.now(), ...event })}\n`);
+
     const results = await claimAll(connection, chosen, payer, {
       dryRun,
       computeUnitPrice: Number(args['priority-fee'] ?? 0),
@@ -402,16 +413,26 @@ async function main() {
       onEvent: (e) => {
         if (e.type === 'planned')
           console.log(c.dim(`packed ${e.wallets} wallet(s) into ${e.batches} transaction(s)\n`));
+        if (e.type === 'retry') {
+          console.log(c.dim(`  ..    ${pad(e.label, 30)} retrying — ${e.reason}`));
+          record(e);
+        }
         if (e.type === 'batch') {
-          const tag = e.ok ? c.green('ok') : c.red('fail');
+          // An indeterminate batch is not a failure. It means the transaction
+          // may have moved money and we could not find out, which needs a
+          // louder mark than "fail" so it is not skimmed past.
+          const tag = e.ok ? c.green('ok') : e.indeterminate ? c.yellow('CHECK') : c.red('fail');
           console.log(
             `  ${tag}  ${pad(e.label, 30)} ${padStart(sol(e.lamports), 12)} SOL` +
               (e.signature ? `  ${c.dim(e.signature)}` : '') +
               (e.err ? `  ${c.red(JSON.stringify(e.err).slice(0, 90))}` : ''),
           );
+          record(e);
         }
       },
     }).catch((e) => die(e.message));
+
+    receipts?.end();
 
     if (args.bags) {
       const client = new BagsClient({ apiKey: process.env.BAGS_API_KEY });
@@ -426,10 +447,23 @@ async function main() {
       }
     }
 
+    const unresolved = results.filter((r) => r.indeterminate);
+    if (unresolved.length > 0) {
+      console.log(
+        c.yellow(
+          `\n${unresolved.length} transaction(s) could not be confirmed either way. ` +
+            `They may have claimed. Check before re-running:`,
+        ),
+      );
+      for (const r of unresolved)
+        console.log(c.yellow(`  ${r.signature}  (${r.wallets.join(', ')})`));
+    }
+
     const landed = results.filter((r) => r.ok).reduce((n, r) => n + r.lamports, 0);
     console.log(
       `\n${c.bold(sol(landed))} SOL ${dryRun ? c.yellow('would be claimed (simulated)') : c.green('claimed')}`,
     );
+    if (receiptPath) console.log(c.dim(`receipts appended to ${receiptPath}`));
     if (dryRun) console.log(c.dim('re-run with --execute to send these transactions for real.'));
     return;
   }

@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-164%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-172%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -171,6 +171,58 @@ node bin/harvest.mjs scan --wallets wallets.jsonl --out found.jsonl --concurrenc
 
 `--out` appends each funded wallet the moment it is found, so a long run stays useful even if you stop it early.
 
+## Sending
+
+Claiming is a dry run unless you pass `--execute`, and a dry run needs no
+private key at all — the preview is a real simulation against real chain
+state, so you can see what you own before exposing anything.
+
+Once it is real, the interesting part is not the happy path. Three things are
+worth knowing about how a send that goes wrong is handled.
+
+**Every transaction is signed against a fresh blockhash.** A blockhash lives
+about 150 slots, call it a minute. Signing a whole run against one — which is
+the obvious way to write this — silently caps the run at whatever fits in that
+minute, and every transaction after it fails with `Blockhash not found` no
+matter how many wallets are left. A run is now as long as the wallet list.
+
+**A confirmation that times out is not treated as a failure.** It means the
+client stopped waiting, not that the money stayed put; the transaction can
+still land afterwards. So the chain is asked what actually happened before
+anything is reported, and the answer decides:
+
+| what the chain says                            | what happens                                         |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| it landed                                      | reported as claimed, never re-sent                   |
+| it reverted                                    | reported with its signature, never re-sent           |
+| it is not there, and the blockhash has expired | it can never land, so it is safely re-sent           |
+| the chain could not be asked                   | **stops**, and prints the signature to check by hand |
+
+That last row is the one that matters. Not confirmed and not disproved means
+re-sending might claim twice, so the run refuses to guess and hands you the
+signature instead. It is marked `CHECK`, not `fail`.
+
+**Every transaction is recorded as it happens**, not at the end, if you pass
+`--receipts`:
+
+```bash
+harvest claim --all --execute --receipts run.jsonl
+```
+
+```json
+{
+  "ts": 1787534635605,
+  "type": "batch",
+  "label": "batch 1/1 (1 action)",
+  "ok": true,
+  "lamports": 181244812,
+  "wallets": ["known"],
+  "simulated": true
+}
+```
+
+A run killed halfway still leaves a complete record of what it sent.
+
 ## Fee sharing
 
 When a creator splits fees with a team, pump.fun sets `bonding_curve.creator` to the **sharing config PDA** rather than to a wallet. Fees then accumulate in a vault belonging to that PDA, and `collect_creator_fee` refuses to touch it with error `6050`.
@@ -301,6 +353,7 @@ A few details that are easy to get wrong, and are pinned by tests:
 | `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                |
 | `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning |
 | `--out <file.jsonl>` | append every funded wallet as it is found                               |
+| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                |
 | `--find-shares`      | also hunt fees held for you in team sharing configs                     |
 | `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                           |
 | `--no-preflight`     | skip the per-action simulation pass                                     |
@@ -311,7 +364,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 164 tests, no network required
+npm test                    # 172 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script
