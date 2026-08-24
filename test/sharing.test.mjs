@@ -13,6 +13,7 @@ import {
   decodeSharingConfig,
   distributeCreatorFeesIx,
   distributableLamports,
+  buildShareholderIndex,
   findConfigsForShareholder,
   isSharingConfig,
   shareFor,
@@ -276,4 +277,117 @@ test('a slot that keeps failing throws instead of reporting no fees', async () =
       }),
     /shareholder slot \d+ failed after 2 attempts/,
   );
+});
+
+/* ------------------------------------------------- the shareholder index -- */
+
+/**
+ * A stand-in for the chain that honours dataSlice, because the index depends
+ * on it: pass A reads a window of each config, and a stub that ignored the
+ * slice would hide whether the overflow pass is doing anything.
+ */
+function chainWith(configs) {
+  const byAddress = new Map(configs.map((c) => [c.address.toBase58(), c.data]));
+  const calls = { getProgramAccounts: 0, getMultipleAccountsInfo: 0 };
+  return {
+    calls,
+    async getProgramAccounts(_program, { dataSlice }) {
+      calls.getProgramAccounts++;
+      return configs.map((c) => ({
+        pubkey: c.address,
+        account: {
+          data: dataSlice
+            ? c.data.subarray(dataSlice.offset, dataSlice.offset + dataSlice.length)
+            : c.data,
+          owner: PUMP_FEES_PROGRAM,
+        },
+      }));
+    },
+    async getMultipleAccountsInfo(addresses) {
+      calls.getMultipleAccountsInfo++;
+      return addresses.map((a) => {
+        const data = byAddress.get(a.toBase58());
+        return data ? { data, owner: PUMP_FEES_PROGRAM } : null;
+      });
+    },
+  };
+}
+
+const configWith = (shareholders) => {
+  const mint = Keypair.generate().publicKey;
+  return { address: sharingConfig(mint), mint, data: buildConfig(mint, shareholders) };
+};
+
+test('the index finds a wallet sitting in the first slot', async () => {
+  const me = Keypair.generate().publicKey;
+  const chain = chainWith([
+    configWith([{ address: me, bps: 10000 }]),
+    configWith([{ address: Keypair.generate().publicKey, bps: 10000 }]),
+  ]);
+  const index = await buildShareholderIndex(chain, [me]);
+  assert.equal(index.get(me.toBase58())?.length, 1);
+});
+
+test('the index finds a wallet past the inlined slots', async () => {
+  // The slice covers the first couple of shareholders; anything deeper is only
+  // found because the overflow pass refetches those configs in full. Without
+  // it this wallet would be silently missed — the exact failure this design
+  // exists to prevent.
+  const me = Keypair.generate().publicKey;
+  const deep = Array.from({ length: 6 }, () => ({
+    address: Keypair.generate().publicKey,
+    bps: 1000,
+  }));
+  deep[5] = { address: me, bps: 5000 };
+  const chain = chainWith([configWith(deep)]);
+
+  const index = await buildShareholderIndex(chain, [me]);
+  assert.equal(index.get(me.toBase58())?.length, 1, 'found despite sitting in slot 6');
+  assert.equal(index.get(me.toBase58())[0].shareholders.length, 6, 'full record, not the slice');
+});
+
+test('a wallet that holds no shares gets nothing', async () => {
+  const chain = chainWith([configWith([{ address: Keypair.generate().publicKey, bps: 10000 }])]);
+  const index = await buildShareholderIndex(chain, [Keypair.generate().publicKey]);
+  assert.equal(index.size, 0);
+});
+
+test('the configs are read once however many wallets are asked about', async () => {
+  // This is the whole point: the per-wallet sweep costs 27 filtered requests
+  // each, so a hundred wallets cost 2,700. Here it stays at one.
+  const wallets = Array.from({ length: 100 }, () => Keypair.generate().publicKey);
+  const chain = chainWith([
+    configWith([
+      { address: wallets[0], bps: 6000 },
+      { address: wallets[1], bps: 4000 },
+    ]),
+    configWith([{ address: wallets[99], bps: 10000 }]),
+  ]);
+
+  const index = await buildShareholderIndex(chain, wallets);
+  assert.equal(chain.calls.getProgramAccounts, 1, 'one pass over the configs');
+  assert.equal(index.get(wallets[0].toBase58())?.length, 1);
+  assert.equal(index.get(wallets[1].toBase58())?.length, 1);
+  assert.equal(index.get(wallets[99].toBase58())?.length, 1);
+});
+
+test('one wallet holding several shares collects them all', async () => {
+  const me = Keypair.generate().publicKey;
+  const chain = chainWith([
+    configWith([{ address: me, bps: 10000 }]),
+    configWith([
+      { address: Keypair.generate().publicKey, bps: 5000 },
+      { address: me, bps: 5000 },
+    ]),
+    configWith([{ address: Keypair.generate().publicKey, bps: 10000 }]),
+  ]);
+  const index = await buildShareholderIndex(chain, [me]);
+  assert.equal(index.get(me.toBase58())?.length, 2);
+});
+
+test('asking about no wallets does not read the chain at all', async () => {
+  const chain = chainWith([configWith([{ address: Keypair.generate().publicKey, bps: 10000 }])]);
+  const index = await buildShareholderIndex(chain, []);
+  assert.equal(index.size, 0);
+  assert.equal(chain.calls.getProgramAccounts, 0);
 });

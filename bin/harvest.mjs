@@ -21,7 +21,7 @@ import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
 import { defaultWorkerCount } from '../src/derive.mjs';
 import { createLimiter } from '../src/limit.mjs';
-import { attachDistributions } from '../src/sharing.mjs';
+import { attachDistributions, buildShareholderIndex } from '../src/sharing.mjs';
 import { multiSelect } from '../src/select.mjs';
 import { startDashboard } from '../src/server.mjs';
 
@@ -48,6 +48,8 @@ ${c.bold('Options')}
   --out <file.jsonl>   append every wallet found with fees, as it is found
   --no-preflight       skip the per-wallet simulation pass
   --find-shares        also hunt fees held for you in team sharing configs (slower)
+  --share-index        with --find-shares: read every config once instead of 27
+                       requests per wallet. Far fewer calls, ~1.2GB peak
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
                        note: authenticated responses are not yet confirmed live
   --port <n>           dashboard port (default 4600)
@@ -74,6 +76,13 @@ function parseArgs(argv) {
     }
   }
   return args;
+}
+
+/** Materialise the wallet list. Only used when building a share index. */
+async function collectWallets(walletsPath) {
+  const all = [];
+  for await (const batch of streamWallets(walletsPath, { batchSize: 1000 })) all.push(...batch);
+  return all;
 }
 
 const die = (msg) => {
@@ -125,6 +134,28 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     minDelayMs: Number(args['rpc-delay'] ?? 0),
   });
 
+  // One read of every sharing config, answering all wallets, instead of 27
+  // filtered requests each. Explicit because pass A parses every config on
+  // the chain and peaks around 1.2GB.
+  let shareIndex;
+  if (args['find-shares'] && args['share-index']) {
+    try {
+      shareIndex = await buildShareholderIndex(connection, await collectWallets(walletsPath), {
+        limiter: shareLimiter,
+        onProgress: (e) => {
+          if (e.phase === 'scan-configs') progress('reading every sharing config (one pass)');
+          if (e.phase === 'scanned')
+            progress(`${count(e.configs)} configs, ${count(e.overflow)} need a second look`);
+          if (e.phase === 'done') progress(`indexed shares for ${count(e.wallets)} wallet(s)`);
+        },
+      });
+      clearProgress();
+    } catch (e) {
+      clearProgress();
+      die(`share index failed: ${e.message}`);
+    }
+  }
+
   let rows = [];
   let retries = 0;
   try {
@@ -135,6 +166,7 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
       enrich: (batch) =>
         attachDistributions(connection, batch, {
           findShares: Boolean(args['find-shares']),
+          shareIndex,
           limiter: shareLimiter,
           onProgress: (n, total) => progress(`shareholder scan ${count(n)}/${count(total)}`),
         }),

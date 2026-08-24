@@ -10,7 +10,7 @@ import {
 } from './constants.mjs';
 import { bondingCurve, eventAuthority, pumpCreatorVault } from './pda.mjs';
 import { encodeBase58 } from './base58.mjs';
-import { createLimiter, delay } from './limit.mjs';
+import { createLimiter, delay, withRetry } from './limit.mjs';
 
 /**
  * Fee sharing.
@@ -174,6 +174,130 @@ export async function findConfigsForShareholder(connection, wallet, options = {}
   return [...seen.values()];
 }
 
+/**
+ * Build the shareholder lookup in a fixed number of requests.
+ *
+ * `findConfigsForShareholder` costs 27 filtered requests per wallet, because a
+ * shareholder can sit at any slot in the array. That is fine for a handful of
+ * wallets and hopeless for a hundred — 2,700 of the heaviest call this tool
+ * makes, against endpoints that already throttle them.
+ *
+ * This inverts it: read the configs once, keep only the entries naming a
+ * wallet we hold, and answer every wallet from that. The cost stops depending
+ * on how many wallets you own.
+ *
+ * Completeness is the whole point, so it is done in two passes rather than
+ * one. Pass A slices the vec length plus its first `INLINE_SLOTS` entries,
+ * which covers ~99.5% of configs. Pass B fetches, in full, only those whose
+ * length says they hold more — so a config with more shareholders than the
+ * slice covers is picked up rather than missed. Nothing here assumes the
+ * current maximum (10) will hold.
+ *
+ * The cost is memory: pass A parses every config on the chain, which peaks
+ * around 1.2GB. That is why this is a choice rather than the default.
+ */
+const INLINE_SLOTS = 2;
+
+/** Read shareholders out of a buffer laid out as the vec is on chain. */
+function readShareholders(data, offsetOfLength, available) {
+  const count = data.readUInt32LE(offsetOfLength);
+  const out = [];
+  for (let i = 0; i < Math.min(count, available); i++) {
+    const o = offsetOfLength + 4 + i * SHAREHOLDER_SIZE;
+    if (o + SHAREHOLDER_SIZE > data.length) break;
+    out.push({
+      address: new PublicKey(data.subarray(o, o + 32)),
+      bps: data.readUInt16LE(o + 32),
+    });
+  }
+  return { count, shareholders: out };
+}
+
+export async function buildShareholderIndex(connection, wallets, options = {}) {
+  const { onProgress, limiter } = options;
+  const wanted = new Set(wallets.map((w) => (w.publicKey ?? w).toBase58()));
+  const index = new Map();
+  if (wanted.size === 0) return index;
+
+  const run = (fn) => (limiter ? limiter(fn) : fn());
+  const discFilter = {
+    memcmp: { offset: 0, bytes: encodeBase58(SHARING_CONFIG_DISCRIMINATOR) },
+  };
+
+  onProgress?.({ phase: 'scan-configs' });
+  const summaries = await run(() =>
+    withRetry(
+      () =>
+        connection.getProgramAccounts(PUMP_FEES_PROGRAM, {
+          commitment: 'confirmed',
+          filters: [discFilter],
+          dataSlice: {
+            offset: SHAREHOLDERS_OFFSET - 4,
+            length: 4 + INLINE_SLOTS * SHAREHOLDER_SIZE,
+          },
+        }),
+      { attempts: 4, baseDelayMs: 1000 },
+    ),
+  );
+
+  const hits = new Set();
+  const overflow = [];
+  for (const acc of summaries) {
+    const { count, shareholders } = readShareholders(acc.account.data, 0, INLINE_SLOTS);
+    if (count > INLINE_SLOTS) overflow.push(acc.pubkey);
+    if (shareholders.some((sh) => wanted.has(sh.address.toBase58())))
+      hits.add(acc.pubkey.toBase58());
+  }
+  onProgress?.({ phase: 'scanned', configs: summaries.length, overflow: overflow.length });
+
+  // Let the summaries go before pulling anything else in.
+  summaries.length = 0;
+
+  // Pass B: the tail whose shareholders the slice could not reach.
+  const overflowConfigs = await fetchConfigs(connection, overflow, run);
+  for (const cfg of overflowConfigs) {
+    if (cfg.shareholders.some((sh) => wanted.has(sh.address.toBase58())))
+      hits.add(cfg.address.toBase58());
+  }
+  onProgress?.({ phase: 'tail-checked', matched: hits.size });
+
+  // Full records for the matches, which is where mint and status live.
+  const matched = await fetchConfigs(
+    connection,
+    [...hits].map((k) => new PublicKey(k)),
+    run,
+  );
+  for (const cfg of matched) {
+    for (const sh of cfg.shareholders) {
+      const key = sh.address.toBase58();
+      if (!wanted.has(key)) continue;
+      const list = index.get(key) ?? [];
+      list.push(cfg);
+      index.set(key, list);
+    }
+  }
+  onProgress?.({ phase: 'done', wallets: index.size });
+  return index;
+}
+
+/** Fetch and decode full config accounts, 100 at a time. */
+async function fetchConfigs(connection, addresses, run) {
+  const out = [];
+  for (let i = 0; i < addresses.length; i += 100) {
+    const slice = addresses.slice(i, i + 100);
+    const infos = await run(() =>
+      withRetry(() => connection.getMultipleAccountsInfo(slice), {
+        attempts: 4,
+        baseDelayMs: 500,
+      }),
+    );
+    infos.forEach((info, j) => {
+      if (isSharingConfig(info)) out.push(decodeSharingConfig(slice[j], info.data));
+    });
+  }
+  return out;
+}
+
 /** Attach live vault balances to a set of configs. Module-internal. */
 async function withVaultBalances(connection, configs) {
   if (configs.length === 0) return [];
@@ -208,7 +332,7 @@ async function withVaultBalances(connection, configs) {
 export async function attachDistributions(
   connection,
   rows,
-  { findShares = false, concurrency = 2, onProgress, limiter } = {},
+  { findShares = false, concurrency = 2, onProgress, limiter, shareIndex } = {},
 ) {
   const out = rows.map((r) => ({ ...r, distributions: [], sharingLamports: 0 }));
 
@@ -239,7 +363,11 @@ export async function attachDistributions(
         if (!next) return;
         const [, row] = next;
         try {
-          const configs = await findConfigsForShareholder(connection, row.publicKey, { limiter });
+          // A prebuilt index answers every wallet from one read of the
+          // configs; without one, fall back to probing each slot per wallet.
+          const configs = shareIndex
+            ? (shareIndex.get(row.publicKey.toBase58()) ?? [])
+            : await findConfigsForShareholder(connection, row.publicKey, { limiter });
           const withBalances = await withVaultBalances(connection, configs);
           for (const cfg of withBalances) {
             if (cfg.distributable <= 0) continue;

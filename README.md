@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-150%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-156%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -194,7 +194,20 @@ Because _what moves_ and _what you receive_ are different numbers, the output sh
 Sharing configs live under a separate program, `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ` (`pump_fees`) — which is why they are invisible if you look under pump.fun. That address is not hardcoded on trust; it is read from the `program` override in pump.fun's own IDL and re-checked by `npm run verify:onchain`.
 
 > [!NOTE]
-> `--find-shares` issues one filtered `getProgramAccounts` per shareholder slot (27 of them). The public RPC rate-limits that hard. A failed slot is reported rather than counted as zero, because a silent zero here is the one wrong answer that costs you money. Use a private RPC for this flag.
+> `--find-shares` issues one filtered `getProgramAccounts` per shareholder slot (27 of them) **per wallet**. A failed slot is reported rather than counted as zero, because a silent zero here is the one wrong answer that costs you money. Use a private RPC for this flag.
+
+For more than a handful of wallets, add `--share-index`. It reads every sharing config once and answers all your wallets from that, so the cost stops depending on how many you own:
+
+| wallets | per-wallet requests | with `--share-index` |
+| ------: | ------------------: | -------------------: |
+|       1 |                  27 |                   28 |
+|      10 |                 270 |                   28 |
+|     100 |               2,700 |                   28 |
+|   1,000 |              27,000 |                   28 |
+
+There are 578,291 of these configs on mainnet and 97% name a single shareholder, so the index is built in two passes: one slice covering the common case, then a full refetch of the ~2,639 configs holding more than the slice reaches. That second pass is what makes it _complete_ rather than merely fast — a wallet sitting in the tenth slot is still found, and a test proves it by failing when that pass is removed.
+
+The cost is memory: the first pass parses every config on the chain and peaks around 1.2GB, which is why it is a flag rather than the default. Measured against the same two wallets, both strategies returned identical results — 14 configs and 0 — in 69.7s indexed versus 91.3s per-wallet, and the indexed figure does not grow with the wallet count.
 
 ## Bags
 
@@ -298,7 +311,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 150 tests, no network required
+npm test                    # 156 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script
