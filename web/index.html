@@ -243,6 +243,10 @@
       .row.fail {
         border-left: 3px solid var(--red);
       }
+      .row.check {
+        border-left: 3px solid var(--amber);
+        background: color-mix(in srgb, var(--amber) 10%, var(--panel));
+      }
       .warn {
         background: color-mix(in srgb, var(--amber) 14%, transparent);
         border: 1px solid var(--amber);
@@ -435,8 +439,9 @@
             `<div class="row"><b>${data.executed ? 'Executed' : 'Simulated'}</b> — ${data.results.length} transaction(s)</div>` +
             data.results
               .map(
-                (r) => `<div class="row ${r.ok ? 'ok' : 'fail'}">
-        <b>${r.ok ? 'ok' : 'failed'}</b> · ${r.label} · ${sol(r.lamports)} SOL · ${r.wallets.join(', ')}
+                (r) => `<div class="row ${r.ok ? 'ok' : r.indeterminate ? 'check' : 'fail'}">
+        <b>${r.ok ? 'ok' : r.indeterminate ? 'check this one' : 'failed'}</b> · ${r.label} · ${sol(r.lamports)} SOL · ${r.wallets.join(', ')}
+        ${r.indeterminate ? '<br><span class="reason">not confirmed either way — this may have claimed. Check the transaction before claiming again.</span>' : ''}
         ${r.signature ? `<br><a href="https://solscan.io/tx/${r.signature}" target="_blank" rel="noreferrer">${r.signature}</a>` : ''}
         ${r.err ? `<br><span class="reason">${r.err}</span>` : ''}</div>`,
               )

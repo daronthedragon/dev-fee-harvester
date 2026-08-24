@@ -341,6 +341,37 @@ test('a failed batch is shown as failed, with its reason', async () => {
   assert.match($(document, '#log').textContent, /AccountNotFound/);
 });
 
+test('a batch with an unknown outcome is not shown as a plain failure', async () => {
+  // Not confirmed and not disproved: this transaction may have claimed. Styled
+  // like every other failure, someone re-runs and claims twice.
+  const claimResult = {
+    executed: true,
+    results: [
+      {
+        label: 'batch 1/1',
+        ok: false,
+        indeterminate: true,
+        lamports: 1_049_487_000,
+        wallets: ['dev-04'],
+        signature: '5xoT9pQnFakeSignatureForTheDomTestOnly11111111111111111111111111',
+        err: '"could not determine the outcome"',
+      },
+    ],
+  };
+  const { document } = await mount({ wallets: [directWallet()], claimResult, allowExecute: true });
+  $(document, '#dry').click();
+  await waitFor(() => $(document, '#log').textContent.includes('batch 1/1'), 'results');
+
+  const row = $(document, '#log .row.check');
+  assert.ok(row, 'an indeterminate batch needs its own state, not .fail');
+  assert.equal($(document, '#log .row.fail'), null, 'it must not also read as a failure');
+  assert.match(row.textContent, /may have claimed/i, 'it has to say why it needs a look');
+  assert.ok(
+    $(document, '#log a[href*="solscan.io/tx/"]'),
+    'the signature must be linked — it is the only way to check',
+  );
+});
+
 /* ---------------------------------------------------------------- warning -- */
 
 test('an incomplete shareholder scan is surfaced, not silently ignored', async () => {

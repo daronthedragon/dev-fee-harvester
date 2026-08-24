@@ -11,6 +11,30 @@ import { scanWallets } from './scan.mjs';
 import { attachDistributions } from './sharing.mjs';
 
 /**
+ * Shape a claim run for the browser.
+ *
+ * Pure, exported and tested on its own because it is the one place where a
+ * dropped field is silently dangerous: `indeterminate` marks a transaction
+ * that may have moved money and could not be confirmed either way. Lose it
+ * here and the dashboard paints it as an ordinary failure, which invites
+ * someone to claim a second time.
+ */
+export function toClaimResponse(results, executed) {
+  return {
+    executed,
+    results: results.map((r) => ({
+      label: r.label,
+      ok: r.ok,
+      lamports: r.lamports,
+      wallets: r.wallets,
+      signature: r.signature ?? null,
+      indeterminate: Boolean(r.indeterminate),
+      err: r.err ? String(JSON.stringify(r.err)).slice(0, 300) : null,
+    })),
+  };
+}
+
+/**
  * Local dashboard.
  *
  * This process holds signing keys, so the server binds to 127.0.0.1 only and
@@ -26,6 +50,9 @@ export async function startDashboard({
   findShares = false,
   concurrency = 8,
   rpcDelayMs = 0,
+  // Injectable so tests can start a real server without writing into the
+  // test runner's own output stream.
+  log = console.log,
 }) {
   const token = randomBytes(24).toString('hex');
   const connection = new Connection(rpc, {
@@ -155,17 +182,7 @@ export async function startDashboard({
           computeUnitPrice: Number(body.priorityFee ?? 0),
           maxPerTx: Number(body.maxPerTx ?? 8),
         });
-        return json(res, 200, {
-          executed: execute,
-          results: results.map((r) => ({
-            label: r.label,
-            ok: r.ok,
-            lamports: r.lamports,
-            wallets: r.wallets,
-            signature: r.signature ?? null,
-            err: r.err ? String(JSON.stringify(r.err)).slice(0, 300) : null,
-          })),
-        });
+        return json(res, 200, toClaimResponse(results, execute));
       }
     } catch (err) {
       return json(res, 500, { error: err.message });
@@ -177,9 +194,10 @@ export async function startDashboard({
   await new Promise((resolve) => {
     server.listen(port, '127.0.0.1', resolve);
   });
-  const link = `http://127.0.0.1:${port}/?token=${token}`;
-  console.log(`${c.bold('dashboard')} ${c.cyan(link)}`);
-  console.log(c.dim(`${wallets.length} wallet(s) loaded · ${execLabel(allowExecute)}`));
+  const bound = server.address().port;
+  const link = `http://127.0.0.1:${bound}/?token=${token}`;
+  log(`${c.bold('dashboard')} ${c.cyan(link)}`);
+  log(c.dim(`${wallets.length} wallet(s) loaded · ${execLabel(allowExecute)}`));
   return { server, url: link, token };
 }
 
