@@ -34,6 +34,26 @@ async function addressesFor(wallets, quoteMint, pool) {
   return addresses;
 }
 
+/**
+ * A wallet the creator index ruled out. It has no creator vault, so there is
+ * nothing to look up; `walletLamports` is null rather than 0 because its
+ * balance was never asked for, and a fee payer must not be chosen on the
+ * strength of a number nobody read.
+ */
+function skippedRow(wallet) {
+  return {
+    ...wallet,
+    pumpLamports: 0,
+    pumpswapLamports: 0,
+    totalLamports: 0,
+    walletLamports: null,
+    selfConfig: null,
+    selfConfigDistributable: 0,
+    needsAta: false,
+    notCreator: true,
+  };
+}
+
 function buildRow(wallet, vaultInfo, ataInfo, selfInfo) {
   const pump = pumpClaimable(vaultInfo?.lamports ?? 0);
   const pumpswap = Number(tokenAmount(ataInfo));
@@ -70,7 +90,17 @@ const hasFees = (row) =>
 /**
  * Scan one batch of wallets, issuing its account lookups concurrently.
  */
-async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool }) {
+async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool, creatorIndex }) {
+  // The index answers "could this wallet have creator fees?" locally. A `no`
+  // is certain, so those wallets cost nothing: no derivation, no lookup, no
+  // request. On a large list of ordinary addresses that removes almost all of
+  // the work, which is the whole point of it.
+  const all = wallets;
+  if (creatorIndex) {
+    wallets = wallets.filter((w) => creatorIndex.mightBeCreator(w.publicKey));
+    if (wallets.length === 0) return all.map(skippedRow);
+  }
+
   const addresses = await addressesFor(wallets, quoteMint, pool);
   const chunks = [];
   for (let i = 0; i < addresses.length; i += RPC_ACCOUNT_CHUNK) {
@@ -84,7 +114,13 @@ async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, poo
   );
 
   const infos = results.flat();
-  return wallets.map((w, i) => buildRow(w, infos[i * 3], infos[i * 3 + 1], infos[i * 3 + 2]));
+  const rows = wallets.map((w, i) => buildRow(w, infos[i * 3], infos[i * 3 + 1], infos[i * 3 + 2]));
+  if (!creatorIndex) return rows;
+
+  // Put the skipped wallets back where they were. Callers see one row per
+  // wallet in the order they supplied, index or no index.
+  const byWallet = new Map(wallets.map((w, i) => [w, rows[i]]));
+  return all.map((w) => byWallet.get(w) ?? skippedRow(w));
 }
 
 /**
@@ -114,6 +150,7 @@ export async function* scanStream(walletBatches, connection, options = {}) {
     enrich,
     workers = 0,
     derivePool,
+    creatorIndex = null,
   } = options;
 
   const limiter = createLimiter({ concurrency, minDelayMs });
@@ -123,13 +160,21 @@ export async function* scanStream(walletBatches, connection, options = {}) {
   const ownsPool = !derivePool && pool !== null;
   let scanned = 0;
   let found = 0;
+  let checked = 0;
   // Duplicates are removed here rather than in the loader: only funded
   // wallets reach this point, so the set stays tiny and the check stays exact.
   const seen = new Set();
 
   try {
     for await (const wallets of walletBatches) {
-      let rows = await scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool });
+      let rows = await scanBatch(connection, wallets, {
+        quoteMint,
+        limiter,
+        onRetry,
+        pool,
+        creatorIndex,
+      });
+      for (const row of rows) if (!row.notCreator) checked++;
       // Enrichment runs before the filter, and per batch, so work that depends
       // on a wallet having no balance of its own still sees it — while memory
       // stays bounded to one batch.
@@ -148,7 +193,7 @@ export async function* scanStream(walletBatches, connection, options = {}) {
         kept.push(row);
       }
       found += kept.length;
-      onProgress?.(scanned, found);
+      onProgress?.(scanned, found, checked);
       if (kept.length > 0) yield kept;
     }
   } finally {

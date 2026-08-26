@@ -163,6 +163,62 @@ Three things got it there:
 - **Deduplication happens late.** A Set of every address seen cost ~1.1 KB per wallet, five times the wallet records themselves. Duplicates are removed from the funded set instead — exact, and free.
 - **Address derivation is threaded.** Three program addresses per wallet at ~280 µs each, nearly all of it inside the pure-JS `isOnCurve` check — that, not the RPC, is the real floor. Eight workers measured **5.7× faster**, with 0 address mismatches against the single-threaded reference across 12,000 addresses.
 
+### Skip the wallets that were never creators
+
+Everything above makes the per-wallet work cheap. This removes it.
+
+A scan costs three account lookups per wallet — the bonding-curve vault, the PumpSwap vault, and the wallet itself — and it pays that whether or not the wallet has ever launched a coin. On a big list almost none of them have. The answer is no for nearly every wallet, and it was being bought one wallet at a time.
+
+The chain will answer in bulk instead. Every coin names its creator: `BondingCurve.creator` on the curve, `Pool.coin_creator` after it migrates. Reading that one field from all of them — and nothing else — gives the complete set of addresses that could possibly have creator fees, in two streamed requests. A wallet outside that set is skipped without asking the chain anything.
+
+```bash
+node bin/harvest.mjs scan --wallets wallets.jsonl --creator-index
+```
+
+Measured against mainnet, on a list of 20,000 addresses with 25 real creators mixed in:
+
+```
+                     requests    time     wallets with fees
+  without index           600   162.6s  20
+  with index                1     0.1s  20
+
+  fewer requests     600x
+  RESULTS IDENTICAL
+```
+
+The index is built once and cached in `~/.dev-fee-harvester/creators.idx`, then picked up automatically on later runs and rebuilt when it is a day old. Building it reads both programs end to end — 7,984,043 bonding curves and 1,315,827 pools, 236s against the public RPC — which is minutes well spent on a hundred thousand wallets and minutes wasted on five. That is why it is a flag and not the default.
+
+**It cannot cost you a wallet.** The creators are far too many to keep, so they are streamed into a Bloom filter: 16MB fixed, whatever the chain does next. A Bloom filter is one-sided — it can say "maybe" about an address that is not in it, but never "no" about one that is. Here the errors land on the harmless side: a false positive is one wasted lookup, and a false negative, which would silently drop a wallet with money in it, cannot happen.
+
+The numbers behind that, measured rather than assumed:
+
+|                            |                                            |
+| -------------------------- | ------------------------------------------ |
+| coins read                 | 9,299,870                                  |
+| distinct creators          | 1,583,727                                  |
+| filter occupancy           | 9.0% of 2^27 bits                          |
+| false-positive rate        | 4.3e-9 — one stray lookup per 230M wallets |
+| peak memory while building | 27 MB                                      |
+
+And checked against the chain rather than against the code's own assumptions — a stub that agrees with a wrong offset proves nothing:
+
+```
+real creators sampled from chain: 500
+  index says "not a creator"    : 0 (none - correct)
+fresh keypairs tested          : 50000
+  index says "might be creator": 0
+```
+
+Both byte offsets come from the programs' own IDLs, and `npm run verify:onchain` re-derives them. A moved field would fill the filter with the wrong bytes and skip every wallet — a wrong answer that looks exactly like a right one — so it is checked, not trusted:
+
+```
+creator index:
+  OK   BondingCurve.creator offset
+  OK   Pool.coin_creator offset
+  OK   BondingCurve account discriminator
+  OK   Pool account discriminator
+```
+
 For very large lists use JSONL, which streams line by line:
 
 ```bash
@@ -337,27 +393,30 @@ A few details that are easy to get wrong, and are pinned by tests:
 
 ## Options
 
-| Flag                 |                                                                         |
-| -------------------- | ----------------------------------------------------------------------- |
-| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files              |
-| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                     |
-| `--payer <key>`      | who pays fees, by label or pubkey                                       |
-| `--min <sol>`        | ignore wallets below this amount                                        |
-| `--all`              | take every claimable wallet, no picker                                  |
-| `--execute`          | actually send. Without it, everything is simulated                      |
-| `--priority-fee <n>` | compute unit price in micro-lamports                                    |
-| `--max-per-tx <n>`   | actions per transaction (default 8)                                     |
-| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                 |
-| `--concurrency <n>`  | parallel RPC requests (default 8)                                       |
-| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)   |
-| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                |
-| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning |
-| `--out <file.jsonl>` | append every funded wallet as it is found                               |
-| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                |
-| `--find-shares`      | also hunt fees held for you in team sharing configs                     |
-| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                           |
-| `--no-preflight`     | skip the per-action simulation pass                                     |
-| `--json`             | machine-readable scan output                                            |
+| Flag                 |                                                                          |
+| -------------------- | ------------------------------------------------------------------------ |
+| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files               |
+| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                      |
+| `--payer <key>`      | who pays fees, by label or pubkey                                        |
+| `--min <sol>`        | ignore wallets below this amount                                         |
+| `--all`              | take every claimable wallet, no picker                                   |
+| `--execute`          | actually send. Without it, everything is simulated                       |
+| `--priority-fee <n>` | compute unit price in micro-lamports                                     |
+| `--max-per-tx <n>`   | actions per transaction (default 8)                                      |
+| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                  |
+| `--concurrency <n>`  | parallel RPC requests (default 8)                                        |
+| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)    |
+| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                 |
+| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning  |
+| `--out <file.jsonl>` | append every funded wallet as it is found                                |
+| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                 |
+| `--creator-index`    | read every coin's creator once, then skip wallets that never made one    |
+| `--index-file <p>`   | where that index is cached (default `~/.dev-fee-harvester/creators.idx`) |
+| `--rebuild-index`    | rebuild the creator index even if a fresh one is cached                  |
+| `--find-shares`      | also hunt fees held for you in team sharing configs                      |
+| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                            |
+| `--no-preflight`     | skip the per-action simulation pass                                      |
+| `--json`             | machine-readable scan output                                             |
 
 Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags. `FORCE_COLOR=1` keeps colour when output is piped or recorded; `NO_COLOR` always wins.
 

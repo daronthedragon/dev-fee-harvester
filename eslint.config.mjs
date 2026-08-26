@@ -16,7 +16,7 @@ import html from 'eslint-plugin-html';
  */
 export default [
   {
-    ignores: ['node_modules/**', 'pw-browsers/**', 'assets/**'],
+    ignores: ['node_modules/**', 'pw-browsers/**', '.scratch/**', 'assets/**'],
   },
 
   js.configs.recommended,

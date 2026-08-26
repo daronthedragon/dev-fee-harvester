@@ -6,3 +6,4 @@ wallets/
 .env
 pw-browsers/
 test-output.txt
+.scratch/

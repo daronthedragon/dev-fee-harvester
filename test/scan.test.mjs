@@ -87,3 +87,74 @@ test('a funded vault is reported with the rent floor deducted', async () => {
   assert.equal(kept.length, 1);
   assert.equal(kept[0].pumpLamports, 1_000_000_000, 'rent-exempt minimum is not promised');
 });
+
+test('the creator index removes the lookups, not the wallets', async () => {
+  // The whole claim of the index is that a wallet it rules out costs nothing.
+  // Assert on what reached the RPC, not just on the rows that came back.
+  const wallets = Array.from({ length: 10 }, (_, i) => ({
+    publicKey: Keypair.generate().publicKey,
+    label: `w${i}`,
+    secretKey: null,
+  }));
+  const creators = new Set([wallets[3], wallets[7]].map((w) => w.publicKey.toBase58()));
+  const asked = [];
+  const chain = {
+    async getMultipleAccountsInfo(addresses) {
+      asked.push(...addresses);
+      return addresses.map(() => null);
+    },
+  };
+
+  const rows = [];
+  for await (const chunk of scanStream(
+    (async function* () {
+      yield wallets;
+    })(),
+    chain,
+    {
+      workers: 0,
+      keepEmpty: true,
+      creatorIndex: { mightBeCreator: (pk) => creators.has(pk.toBase58()) },
+    },
+  )) {
+    rows.push(...chunk);
+  }
+
+  // Three accounts each for the two creators, and nothing for the other eight.
+  assert.equal(asked.length, 6);
+  for (const w of wallets) {
+    const present = asked.some((a) => a.equals(w.publicKey));
+    assert.equal(present, creators.has(w.publicKey.toBase58()), `${w.label} lookup`);
+  }
+
+  // Every wallet still comes back, in order, so callers see one row each.
+  assert.deepEqual(
+    rows.map((r) => r.label),
+    wallets.map((w) => w.label),
+  );
+  // And a skipped wallet reports an unread balance rather than a zero one.
+  assert.equal(rows[0].walletLamports, null);
+  assert.equal(rows[0].notCreator, true);
+  assert.equal(rows[3].walletLamports, 0);
+  assert.equal(rows[3].notCreator, undefined);
+});
+
+test('a batch the index rules out entirely issues no request at all', async () => {
+  let calls = 0;
+  const chain = {
+    async getMultipleAccountsInfo(addresses) {
+      calls++;
+      return addresses.map(() => null);
+    },
+  };
+  const rows = [];
+  for await (const chunk of scanStream(batchOf(200), chain, {
+    workers: 0,
+    keepEmpty: true,
+    creatorIndex: { mightBeCreator: () => false },
+  })) {
+    rows.push(...chunk);
+  }
+  assert.equal(calls, 0);
+  assert.equal(rows.length, 200);
+});

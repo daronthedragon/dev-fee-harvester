@@ -4,7 +4,7 @@ import process from 'node:process';
 import { LAMPORTS_PER_SOL } from '../src/constants.mjs';
 import { BagsClient, claimBags, scanBags } from '../src/bags.mjs';
 import { claimAll, isActionable } from '../src/claim.mjs';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import {
   c,
   clearProgress,
@@ -21,6 +21,7 @@ import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
 import { defaultWorkerCount } from '../src/derive.mjs';
 import { createLimiter } from '../src/limit.mjs';
+import { defaultIndexPath, openCreatorIndex } from '../src/creator-index.mjs';
 import { attachDistributions, buildShareholderIndex } from '../src/sharing.mjs';
 import { multiSelect } from '../src/select.mjs';
 import { startDashboard } from '../src/server.mjs';
@@ -48,6 +49,10 @@ ${c.bold('Options')}
   --out <file.jsonl>   append every wallet found with fees, as it is found
   --receipts <file>    append a JSONL record of every transaction as it is sent
   --no-preflight       skip the per-wallet simulation pass
+  --creator-index      read every coin's creator once, then skip wallets that
+                       never launched one. Cached; reused automatically after.
+  --index-file <path>  where to keep that index (default ~/.dev-fee-harvester/creators.idx)
+  --rebuild-index      rebuild the creator index even if a fresh one is cached
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --no-share-index     with --find-shares: probe 27 slots per wallet instead of
                        reading the configs once (slower; the old behaviour)
@@ -117,15 +122,37 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   // The fee payer usually has no fees of its own, so it would be filtered
   // away. Track it as rows go past instead of keeping everything.
   let payer = null;
+  // The creator index skips most wallets, so most rows arrive with their
+  // balance unread. Choosing a payer off `?? 0` would pick one of those and
+  // call it broke. Unknowns are held aside instead and priced later, only if
+  // no wallet with a balance we actually read turns out to be good enough.
+  const PAYER_CANDIDATES = 100;
+  const unpriced = [];
   const considerPayer = (row) => {
     if (wanted) {
       if (row.label === wanted || row.publicKey.toBase58() === wanted) payer = row;
       return;
     }
     if (requireSigner && !canSign(row)) return;
-    if (!payer || (row.walletLamports ?? 0) > (payer.walletLamports ?? 0)) {
-      if (!requireSigner || canSign(row)) payer = row;
+    if (row.walletLamports === null) {
+      if (unpriced.length < PAYER_CANDIDATES) unpriced.push(row);
+      return;
     }
+    if (!payer || row.walletLamports > (payer.walletLamports ?? 0)) payer = row;
+  };
+
+  /**
+   * One request, at most, to settle the fee payer: read the balances of the
+   * candidates the index skipped and take the best. Only reached when the
+   * wallets that were priced cannot cover the fees.
+   */
+  const priceCandidates = async (candidates) => {
+    if (candidates.length === 0) return;
+    const infos = await connection.getMultipleAccountsInfo(candidates.map((r) => r.publicKey));
+    candidates.forEach((row, i) => {
+      row.walletLamports = infos[i]?.lamports ?? 0;
+      if (!payer || row.walletLamports > (payer.walletLamports ?? 0)) payer = row;
+    });
   };
 
   // Same pacing as the scan: the shareholder sweep is the heaviest set of
@@ -157,6 +184,54 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     }
   }
 
+  // Every coin on the chain names its creator. Reading that one field from all
+  // of them costs two streamed requests and answers, locally and for free,
+  // the question the scan was paying three lookups per wallet to ask.
+  //
+  // Not on by default: building it reads two whole programs, which is minutes
+  // well spent on a hundred thousand wallets and minutes wasted on five. Once
+  // built it is cached, and a cached index is picked up on its own.
+  let creatorIndex = null;
+  const indexPath =
+    typeof args['index-file'] === 'string' ? args['index-file'] : defaultIndexPath();
+  if (
+    args['creator-index'] ||
+    args['rebuild-index'] ||
+    (existsSync(indexPath) && !args['no-creator-index'])
+  ) {
+    try {
+      creatorIndex = await openCreatorIndex({
+        rpcEndpoint: rpc,
+        path: indexPath,
+        currentSlot: await connection.getSlot('confirmed'),
+        rebuild: Boolean(args['rebuild-index']),
+        onEvent: (e) => {
+          if (e.type === 'loaded') {
+            clearProgress();
+            console.error(
+              c.dim(
+                `creator index: ${count(e.index.counts['bonding curves'])} curves + ` +
+                  `${count(e.index.counts.pools)} pools, ${count(e.ageSlots)} slots old`,
+              ),
+            );
+          }
+          if (e.type === 'stale') progress('creator index is stale, rebuilding');
+          if (e.type === 'building')
+            progress('reading every coin on the chain (one pass, minutes)');
+          if (e.type === 'built') {
+            clearProgress();
+            console.error(c.dim(`creator index written to ${e.path}`));
+          }
+        },
+        onProgress: (src, seen) => progress(`creator index - ${src} ${count(seen)}`),
+      });
+      clearProgress();
+    } catch (e) {
+      clearProgress();
+      die(`creator index failed: ${e.message}`);
+    }
+  }
+
   let rows = [];
   let retries = 0;
   try {
@@ -174,13 +249,15 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
       workers: args.workers === undefined ? defaultWorkerCount() : Number(args.workers),
       concurrency: Number(args.concurrency ?? 8),
       minDelayMs: Number(args['rpc-delay'] ?? 0),
+      creatorIndex,
       onRow: considerPayer,
       onRetry: () => {
         retries++;
       },
-      onProgress: (scanned, found) =>
+      onProgress: (scanned, found, looked) =>
         progress(
           `scanned ${count(scanned)} wallets - ${count(found)} with fees` +
+            (creatorIndex ? ` - ${count(looked)} looked up` : '') +
             (retries ? ` - ${retries} retries` : ''),
         ),
     })) {
@@ -206,6 +283,16 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   clearProgress();
   out?.end();
 
+  // Settle the payer if the best one found is unpriced, missing, or too poor
+  // to be trusted. With no index in play there is never anything to price and
+  // this costs nothing.
+  if (
+    payer === null ||
+    payer.walletLamports === null ||
+    payer.walletLamports < MIN_PAYER_LAMPORTS
+  ) {
+    await priceCandidates(payer?.walletLamports === null ? [payer, ...unpriced] : unpriced);
+  }
   if (payer === null) {
     die(
       requireSigner
