@@ -1,6 +1,6 @@
 import { TOKEN_PROGRAM, SYSTEM_ACCOUNT_RENT_LAMPORTS, WSOL_MINT } from './constants.mjs';
 import { decodeSharingConfig, isSharingConfig } from './sharing.mjs';
-import { createLimiter, withRetry } from './limit.mjs';
+import { createLimiter, withRetry, withTimeout } from './limit.mjs';
 import { createDerivePool, deriveForWallet } from './derive.mjs';
 
 /** getMultipleAccounts caps out at 100 addresses per call. */
@@ -90,7 +90,11 @@ const hasFees = (row) =>
 /**
  * Scan one batch of wallets, issuing its account lookups concurrently.
  */
-async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, pool, creatorIndex }) {
+async function scanBatch(
+  connection,
+  wallets,
+  { quoteMint, limiter, onRetry, pool, creatorIndex, requestTimeoutMs },
+) {
   // The index answers "could this wallet have creator fees?" locally. A `no`
   // is certain, so those wallets cost nothing: no derivation, no lookup, no
   // request. On a large list of ordinary addresses that removes almost all of
@@ -109,7 +113,17 @@ async function scanBatch(connection, wallets, { quoteMint, limiter, onRetry, poo
 
   const results = await Promise.all(
     chunks.map((chunk) =>
-      limiter(() => withRetry(() => connection.getMultipleAccountsInfo(chunk), { onRetry })),
+      limiter(() =>
+        withRetry(
+          () =>
+            withTimeout(
+              connection.getMultipleAccountsInfo(chunk),
+              requestTimeoutMs,
+              'getMultipleAccounts',
+            ),
+          { onRetry },
+        ),
+      ),
     ),
   );
 
@@ -151,6 +165,8 @@ export async function* scanStream(walletBatches, connection, options = {}) {
     workers = 0,
     derivePool,
     creatorIndex = null,
+    // A scan that hangs is worse than one that fails: it looks like progress.
+    requestTimeoutMs = 30_000,
   } = options;
 
   const limiter = createLimiter({ concurrency, minDelayMs });
@@ -173,6 +189,7 @@ export async function* scanStream(walletBatches, connection, options = {}) {
         onRetry,
         pool,
         creatorIndex,
+        requestTimeoutMs,
       });
       for (const row of rows) if (!row.notCreator) checked++;
       // Enrichment runs before the filter, and per batch, so work that depends

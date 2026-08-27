@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-183%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-206%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -177,18 +177,28 @@ The chain will answer in bulk instead. Every coin names its creator: `BondingCur
 node bin/harvest.mjs scan --wallets wallets.jsonl --creator-index
 ```
 
-Measured against mainnet, on a list of 20,000 addresses with 25 real creators mixed in:
+Measured against mainnet, on a list of 100,000 addresses with 25 real creators mixed in:
 
 ```
-                     requests    time     wallets with fees
-  without index           600   162.6s  20
-  with index                1     0.1s  20
+  with index          1 requests    0.8s  20 with fees
+  without index    3719 requests  975.5s  20 with fees
 
-  fewer requests     600x
+  fewer requests  3719x
+  faster          1153x
   RESULTS IDENTICAL
 ```
 
-The index is built once and cached in `~/.dev-fee-harvester/creators.idx`, then picked up automatically on later runs and rebuilt when it is a day old. Building it reads both programs end to end — 7,984,043 bonding curves and 1,315,827 pools, 236s against the public RPC — which is minutes well spent on a hundred thousand wallets and minutes wasted on five. That is why it is a flag and not the default.
+Both legs ran to completion against the public RPC and returned the same twenty wallets. The 3,719 is what was actually issued, retries included — the scan needs 3,000 lookups for a list this size and spent the rest being rate-limited. The indexed leg needs one, and would still need one at a million wallets, because what it costs tracks how many of your wallets ever launched a coin rather than how many you have:
+
+|   wallets | without index | with index |
+| --------: | ------------: | ---------: |
+|    20,000 |  600 requests |          1 |
+|   100,000 |         3,000 |          1 |
+| 1,000,000 |        30,000 |          1 |
+
+(20,000 measured at 600 and 162.6s; 100,000 measured above. The million-wallet row is the same arithmetic, not a run.)
+
+The index is built once and cached in `~/.dev-fee-harvester/creators.idx`, then picked up automatically on later runs and rebuilt when it is a day old. `--index-shards 256` splits the build into concurrent per-byte reads, which moved 175k accounts/s against 39k/s for the single stream — but only where the endpoint allows it: `api.mainnet-beta.solana.com` rate-limits 256 filtered calls far harder than two large ones, and the build does not finish there. It is off by default for that reason. Building it reads both programs end to end — 7,984,043 bonding curves and 1,315,827 pools, 236s against the public RPC — which is minutes well spent on a hundred thousand wallets and minutes wasted on five. That is why it is a flag and not the default.
 
 **It cannot cost you a wallet.** The creators are far too many to keep, so they are streamed into a Bloom filter: 16MB fixed, whatever the chain does next. A Bloom filter is one-sided — it can say "maybe" about an address that is not in it, but never "no" about one that is. Here the errors land on the harmless side: a false positive is one wasted lookup, and a false negative, which would silently drop a wallet with money in it, cannot happen.
 
@@ -220,6 +230,24 @@ creator index:
   OK   BondingCurve account discriminator
   OK   Pool account discriminator
 ```
+
+### Finding the endpoint's limit instead of guessing it
+
+`--concurrency 8` is a guess about someone else's rate limit. Guess low and a read that could take twenty seconds takes four minutes; guess high and it fails outright — which is what the sharded index build did against the public RPC at every fixed width tried.
+
+The index build paces itself instead, the way TCP does: every rate limit halves the width and lengthens the gap, a clean run of requests widens it back one at a time. Against the public endpoint it settles and re-settles on its own:
+
+```
+  pace: width 2 gap 4000ms (rate limit)
+  pace: width 1 gap 4000ms (rate limit)
+  pace: width 2 gap 3200ms (clear)
+  pace: width 3 gap 2560ms (clear)
+  pace: width 4 gap 2048ms (clear)
+```
+
+Retries live inside the limiter deliberately. One that only sees successes cannot know it is being throttled — the retry would absorb the signal and the width would never come down.
+
+And every account lookup now has a ceiling on how long it may take. A retry loop cannot rescue a request that neither resolves nor rejects, and that is not hypothetical: a 100,000-wallet scan sat on the same request count for twenty-five minutes, with no error and no progress, because a socket stalled. A stalled request has to become an error before anything can deal with it.
 
 For very large lists use JSONL, which streams line by line:
 
@@ -415,6 +443,7 @@ A few details that are easy to get wrong, and are pinned by tests:
 | `--creator-index`    | read every coin's creator once, then skip wallets that never made one    |
 | `--index-file <p>`   | where that index is cached (default `~/.dev-fee-harvester/creators.idx`) |
 | `--rebuild-index`    | rebuild the creator index even if a fresh one is cached                  |
+| `--index-shards <n>` | split the index build into n concurrent reads (try 256 on a private RPC) |
 | `--find-shares`      | also hunt fees held for you in team sharing configs                      |
 | `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                            |
 | `--no-preflight`     | skip the per-action simulation pass                                      |
@@ -425,7 +454,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 183 tests, no network required
+npm test                    # 206 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script

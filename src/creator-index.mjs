@@ -28,8 +28,9 @@ import { homedir } from 'node:os';
 import { PublicKey } from '@solana/web3.js';
 import { PUMP_PROGRAM, PUMPSWAP_PROGRAM } from './constants.mjs';
 import { createBloom, deserializeBloom } from './bloom.mjs';
+import { encodeBase58 } from './base58.mjs';
 import { streamProgramAccounts } from './rpc-stream.mjs';
-import { withRetry } from './limit.mjs';
+import { createAdaptiveLimiter } from './limit.mjs';
 
 /**
  * Account discriminators, base58-encoded for the memcmp filter, with the byte
@@ -70,6 +71,39 @@ const isZero = (buf) => {
  * `onProgress(source, seen)` is called as accounts arrive. Returns the index,
  * which is a Bloom filter plus the slot it was taken at and per-source counts.
  */
+/**
+ * Split the read by the first byte of the creator field.
+ *
+ * One request for eight million accounts is a single point of failure that
+ * takes four minutes to reach, and a stream that dies at 200s has nothing to
+ * show for it. Two hundred and fifty-six requests of about a second each run
+ * concurrently and retry individually. They also read less: a memcmp at the
+ * creator offset cannot match an account too short to have one, so the
+ * millions of pre-fee-sharing curves — which have no creator and contribute
+ * nothing — are never sent at all.
+ *
+ * The shards partition on a byte of the field, so their union is every account
+ * that has that field. Nothing falls between them.
+ *
+ * Off by default, because it is faster only where the endpoint allows it.
+ * Measured on api.mainnet-beta.solana.com the sharded read moved 175k
+ * accounts/s against 39k/s for the single stream — and then stopped, because
+ * that endpoint's per-method quota treats 256 filtered calls far more harshly
+ * than two large ones, and the limiter settled at a width of 1 with a 4s gap.
+ * On a private RPC it is the faster path; on the public one it does not
+ * finish. `--index-shards 256` turns it on.
+ */
+const SHARD_BYTES = Array.from({ length: 256 }, (_, b) => encodeBase58(Buffer.from([b])));
+
+/**
+ * Read every coin on the chain and keep only who created it.
+ *
+ * `onProgress(source, seen)` is called as accounts arrive. Returns the index,
+ * which is a Bloom filter plus the slot it was taken at and per-source counts.
+ *
+ * `shards: 0` reads each program in one request instead, which is slower and
+ * all-or-nothing, but asks nothing of the endpoint beyond a plain scan.
+ */
 export async function buildCreatorIndex(rpcEndpoint, options = {}) {
   const {
     onProgress,
@@ -77,30 +111,53 @@ export async function buildCreatorIndex(rpcEndpoint, options = {}) {
     slot = 0,
     bloom = createBloom(),
     sources = CREATOR_SOURCES,
+    shards = 0,
+    concurrency = 8,
+    onRetry,
+    onPace,
   } = options;
 
+  // The width is a starting guess, not a setting: it moves to whatever the
+  // endpoint turns out to allow.
+  const limiter = createAdaptiveLimiter({ start: concurrency, onChange: onPace });
   const counts = {};
+
   for (const source of sources) {
     let seen = 0;
-    await withRetry(
-      () =>
-        streamProgramAccounts(rpcEndpoint, source.program, {
-          commitment: 'confirmed',
-          ...(fetchImpl ? { fetchImpl } : {}),
-          filters: [{ memcmp: { offset: 0, bytes: source.discriminator, encoding: 'base58' } }],
-          dataSlice: { offset: source.creatorOffset, length: 32 },
-          onAccount: ({ data }) => {
-            seen++;
-            // A sliced read that comes back short means the account is not the
-            // shape the offset assumed. Skipping it silently would quietly
-            // shrink the set, so it is counted and left out loudly instead.
-            if (data.length !== 32 || isZero(data)) return;
-            bloom.add(data);
-            if (onProgress && seen % 100000 === 0) onProgress(source.name, seen);
-          },
-        }),
-      { attempts: 4, baseDelayMs: 1000 },
-    );
+    const read = (extraFilters) =>
+      limiter.run(
+        () =>
+          streamProgramAccounts(rpcEndpoint, source.program, {
+            commitment: 'confirmed',
+            ...(fetchImpl ? { fetchImpl } : {}),
+            filters: [
+              { memcmp: { offset: 0, bytes: source.discriminator, encoding: 'base58' } },
+              ...extraFilters,
+            ],
+            dataSlice: { offset: source.creatorOffset, length: 32 },
+            onAccount: ({ data }) => {
+              seen++;
+              // A sliced read that comes back short means the account is not
+              // the shape the offset assumed — a legacy layout with no creator
+              // on it. It has no fees for anyone, so it is counted and left out.
+              if (data.length !== 32 || isZero(data)) return;
+              bloom.add(data);
+              if (onProgress && seen % 100000 === 0) onProgress(source.name, seen);
+            },
+          }),
+        { onRetry },
+      );
+
+    if (shards > 0) {
+      await Promise.all(
+        SHARD_BYTES.map((bytes) =>
+          read([{ memcmp: { offset: source.creatorOffset, bytes, encoding: 'base58' } }]),
+        ),
+      );
+    } else {
+      await read([]);
+    }
+
     counts[source.name] = seen;
     onProgress?.(source.name, seen);
   }

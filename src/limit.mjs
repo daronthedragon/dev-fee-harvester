@@ -85,3 +85,128 @@ export async function forEachBatch(iterable, handler) {
     await handler(batch, index++);
   }
 }
+
+/**
+ * A limiter that finds the endpoint's capacity instead of being told it.
+ *
+ * `--concurrency 8` is a guess about someone else's rate limit. Guess low and
+ * a read that could take twenty seconds takes four minutes; guess high and it
+ * fails outright, which is what a 256-shard index build did against the public
+ * RPC at every fixed value tried — the quota is per-method and a sustained
+ * burst exhausts it whatever the parallelism.
+ *
+ * So it adapts, the way TCP does: additive increase, multiplicative decrease.
+ * Every rate limit halves the width and lengthens the gap between requests;
+ * a clean run of them widens it back one at a time. It settles just under
+ * whatever the endpoint will actually give, and re-settles if that changes.
+ *
+ * Retries live inside it deliberately. A limiter that only sees successes
+ * cannot know it is being throttled — the retry would absorb the signal and
+ * the width would never come down.
+ */
+export function createAdaptiveLimiter({
+  start = 8,
+  min = 1,
+  max = 32,
+  attempts = 8,
+  baseDelayMs = 500,
+  maxPaceMs = 4000,
+  onChange,
+} = {}) {
+  let width = Math.min(max, Math.max(min, start));
+  let pace = 0;
+  let active = 0;
+  let ok = 0;
+  const queue = [];
+
+  // `active` is claimed here, synchronously, as the slot is handed out. Doing
+  // it in the caller after its await would leave this loop looking at a stale
+  // zero and dispatch the entire queue at once, limiting nothing.
+  const pump = () => {
+    while (active < width && queue.length > 0) {
+      active++;
+      queue.shift()();
+    }
+  };
+
+  const slot = () =>
+    new Promise((resolve) => {
+      queue.push(resolve);
+      pump();
+    });
+
+  const narrow = () => {
+    const was = width;
+    width = Math.max(min, Math.floor(width / 2));
+    pace = Math.min(maxPaceMs, pace * 2 + 100);
+    ok = 0;
+    if (was !== width) onChange?.({ width, pace, reason: 'rate limit' });
+  };
+
+  const widen = () => {
+    // One clean pass at the current width before asking for more, so a single
+    // lucky request does not undo a backoff.
+    if (++ok < width * 2) return;
+    ok = 0;
+    const was = width;
+    width = Math.min(max, width + 1);
+    pace = Math.max(0, Math.floor(pace * 0.8));
+    if (was !== width) onChange?.({ width, pace, reason: 'clear' });
+  };
+
+  return {
+    get width() {
+      return width;
+    },
+    get pace() {
+      return pace;
+    },
+
+    async run(fn, { onRetry } = {}) {
+      let lastError;
+      for (let i = 0; i < attempts; i++) {
+        await slot();
+        try {
+          if (pace > 0) await delay(pace);
+          const result = await fn();
+          widen();
+          return result;
+        } catch (err) {
+          lastError = err;
+          if (isRateLimit(err)) narrow();
+          if (i === attempts - 1) break;
+          const wait = baseDelayMs * 2 ** i * (isRateLimit(err) ? 2 : 1);
+          onRetry?.(i + 1, err, wait);
+          await delay(wait);
+        } finally {
+          active--;
+          pump();
+        }
+      }
+      throw lastError;
+    },
+  };
+}
+
+/**
+ * Fail a call that never comes back.
+ *
+ * A retry loop cannot help with a request that neither resolves nor rejects,
+ * and that is not hypothetical: a 100,000-wallet scan against the public RPC
+ * sat on the same request count for twenty-five minutes with no error and no
+ * progress. A stalled socket has to become an error before anything else can
+ * deal with it.
+ *
+ * The underlying request is not cancelled — there is nothing to cancel it
+ * with — so this bounds the wait, not the work.
+ */
+export function withTimeout(promise, ms, label = 'request') {
+  if (!(ms > 0)) return promise;
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}

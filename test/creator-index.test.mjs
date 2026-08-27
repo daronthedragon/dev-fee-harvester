@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { createBloom, deserializeBloom } from '../src/bloom.mjs';
+import { decodeBase58 } from '../src/base58.mjs';
 import {
   CREATOR_SOURCES,
   buildCreatorIndex,
@@ -34,13 +35,27 @@ function rpcResponse(creators) {
   return JSON.stringify({ jsonrpc: '2.0', result: value, id: 1 });
 }
 
-/** A fetch stub that replies per program with the creators it was given. */
+/**
+ * A fetch stub that replies per program with the creators it was given.
+ *
+ * It honours the shard filter rather than ignoring it. A stub that returned
+ * everything to every shard would pass whatever the shard byte was, including
+ * a wrong one — the same way an earlier stub agreed with a wrong key order and
+ * hid a parser that matched nothing on mainnet.
+ */
 function stubFetch(byProgram, calls = []) {
   return async (_url, init) => {
     const body = JSON.parse(init.body);
     const program = body.params[0];
-    calls.push({ program, config: body.params[1] });
-    const text = rpcResponse(byProgram[program] ?? []);
+    const config = body.params[1];
+    calls.push({ program, config });
+    let creators = byProgram[program] ?? [];
+    const shard = config.filters.find((f) => f.memcmp.offset === config.dataSlice.offset);
+    if (shard) {
+      const byte = decodeBase58(shard.memcmp.bytes)[0];
+      creators = creators.filter((pk) => pk.toBuffer()[0] === byte);
+    }
+    const text = rpcResponse(creators);
     return {
       ok: true,
       status: 200,
@@ -92,6 +107,7 @@ test('the index reads the creator field of both curves and pools', async () => {
   const poolCreators = keys(2);
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
+    shards: 256,
     fetchImpl: stubFetch(
       {
         [PUMP_PROGRAM.toBase58()]: curveCreators,
@@ -107,13 +123,37 @@ test('the index reads the creator field of both curves and pools', async () => {
   assert.equal(index.counts['bonding curves'], 3);
   assert.equal(index.counts.pools, 2);
 
-  // Two requests total, whatever the wallet count — that is the entire point.
-  assert.equal(calls.length, 2);
-  // Each asks for 32 bytes at the offset that program's IDL puts the creator at.
-  assert.deepEqual(
-    calls.map((c) => c.config.dataSlice),
-    CREATOR_SOURCES.map((s) => ({ offset: s.creatorOffset, length: 32 })),
-  );
+  // 256 shards per program, and every one of them asked for 32 bytes at the
+  // offset that program's IDL puts the creator at.
+  assert.equal(calls.length, 512);
+  for (const source of CREATOR_SOURCES) {
+    const mine = calls.filter((c) => c.program === source.program.toBase58());
+    assert.equal(mine.length, 256);
+    for (const call of mine) {
+      assert.deepEqual(call.config.dataSlice, { offset: source.creatorOffset, length: 32 });
+    }
+    // The shards partition the byte range exactly once each, so nothing is
+    // read twice and nothing falls between them.
+    const bytes = mine
+      .map((c) => decodeBase58(c.config.filters[1].memcmp.bytes)[0])
+      .sort((a, b) => a - b);
+    assert.deepEqual(
+      bytes,
+      Array.from({ length: 256 }, (_, i) => i),
+    );
+  }
+});
+
+test('the default is one request per program, not a sharded read', async () => {
+  const creators = keys(6);
+  const calls = [];
+  const index = await buildCreatorIndex('http://rpc.test', {
+    sources: [CREATOR_SOURCES[0]],
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }, calls),
+  });
+  assert.equal(calls.length, 1, 'the default is a single unfiltered read');
+  assert.equal(calls[0].config.filters.length, 1, 'no shard filter on it');
+  for (const pk of creators) assert.equal(index.mightBeCreator(pk), true);
 });
 
 test('coins with no creator set do not enter the index', async () => {

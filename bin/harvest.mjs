@@ -53,6 +53,8 @@ ${c.bold('Options')}
                        never launched one. Cached; reused automatically after.
   --index-file <path>  where to keep that index (default ~/.dev-fee-harvester/creators.idx)
   --rebuild-index      rebuild the creator index even if a fresh one is cached
+  --index-shards <n>   split the index build into n concurrent reads (try 256 on
+                       a private RPC; the public one rate-limits it to a crawl)
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --no-share-index     with --find-shares: probe 27 slots per wallet instead of
                        reading the configs once (slower; the old behaviour)
@@ -192,6 +194,7 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   // well spent on a hundred thousand wallets and minutes wasted on five. Once
   // built it is cached, and a cached index is picked up on its own.
   let creatorIndex = null;
+  let indexRetries = 0;
   const indexPath =
     typeof args['index-file'] === 'string' ? args['index-file'] : defaultIndexPath();
   if (
@@ -223,7 +226,16 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
             console.error(c.dim(`creator index written to ${e.path}`));
           }
         },
-        onProgress: (src, seen) => progress(`creator index - ${src} ${count(seen)}`),
+        concurrency: Number(args.concurrency ?? 8),
+        shards: Number(args['index-shards'] ?? 0),
+        onProgress: (src, seen) =>
+          progress(
+            `creator index - ${src} ${count(seen)}` +
+              (indexRetries ? ` - ${indexRetries} retries` : ''),
+          ),
+        onRetry: () => {
+          indexRetries++;
+        },
       });
       clearProgress();
     } catch (e) {
