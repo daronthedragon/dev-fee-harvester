@@ -53,8 +53,9 @@ ${c.bold('Options')}
                        never launched one. Cached; reused automatically after.
   --index-file <path>  where to keep that index (default ~/.dev-fee-harvester/creators.idx)
   --rebuild-index      rebuild the creator index even if a fresh one is cached
-  --index-shards <n>   split the index build into n concurrent reads (try 256 on
-                       a private RPC; the public one rate-limits it to a crawl)
+  --index-shards <n>   concurrent reads the index build is split into (default
+                       256; 0 reads each program in one request, which the
+                       public RPC truncates without saying so)
   --find-shares        also hunt fees held for you in team sharing configs (slower)
   --no-share-index     with --find-shares: probe 27 slots per wallet instead of
                        reading the configs once (slower; the old behaviour)
@@ -227,7 +228,7 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
           }
         },
         concurrency: Number(args.concurrency ?? 8),
-        shards: Number(args['index-shards'] ?? 0),
+        shards: Number(args['index-shards'] ?? 256),
         onProgress: (src, seen) =>
           progress(
             `creator index - ${src} ${count(seen)}` +

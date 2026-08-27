@@ -14,9 +14,9 @@
  * creator fees. A wallet outside that set can be skipped without asking the
  * chain about it at all.
  *
- * The set is far too large to keep (8.19M bonding curves as of writing), so it
- * is streamed into a Bloom filter: 16MB, fixed, no matter how much the chain
- * grows. The filter only ever errs towards doing an unnecessary lookup, never
+ * The set is far too large to keep (13.7M coins, 3.47M distinct creators as of
+ * writing), so it is streamed into a Bloom filter: 16MB, fixed, no matter how
+ * much the chain grows. The filter only ever errs towards doing an unnecessary lookup, never
  * towards skipping a wallet that has money in it.
  *
  * Costs, measured rather than estimated — see README.
@@ -66,12 +66,6 @@ const isZero = (buf) => {
 };
 
 /**
- * Read every coin on the chain and keep only who created it.
- *
- * `onProgress(source, seen)` is called as accounts arrive. Returns the index,
- * which is a Bloom filter plus the slot it was taken at and per-source counts.
- */
-/**
  * Split the read by the first byte of the creator field.
  *
  * One request for eight million accounts is a single point of failure that
@@ -85,13 +79,19 @@ const isZero = (buf) => {
  * The shards partition on a byte of the field, so their union is every account
  * that has that field. Nothing falls between them.
  *
- * Off by default, because it is faster only where the endpoint allows it.
- * Measured on api.mainnet-beta.solana.com the sharded read moved 175k
- * accounts/s against 39k/s for the single stream — and then stopped, because
- * that endpoint's per-method quota treats 256 filtered calls far more harshly
- * than two large ones, and the limiter settled at a width of 1 with a 4s gap.
- * On a private RPC it is the faster path; on the public one it does not
- * finish. `--index-shards 256` turns it on.
+ * This is the default, and the single stream is the fallback, because the
+ * single stream was not actually reading the whole program. The public
+ * endpoint cuts a large response off when its data allowance runs out, and
+ * nothing about that looks like a failure — it looks like a program with fewer
+ * accounts than it has. Measured against the same chain minutes apart:
+ *
+ *     one request   9,299,870 accounts   ~1,583,727 creators   236s
+ *     256 shards   13,741,332 accounts   ~3,468,078 creators   796s
+ *
+ * The fast one was fast because it stopped early, and it silently left out
+ * more than half the creators — every one of them a wallet the scan would
+ * then never go looking for. Sharding is slower here and correct.
+ * `--index-shards 0` restores the single read.
  */
 const SHARD_BYTES = Array.from({ length: 256 }, (_, b) => encodeBase58(Buffer.from([b])));
 
@@ -111,7 +111,7 @@ export async function buildCreatorIndex(rpcEndpoint, options = {}) {
     slot = 0,
     bloom = createBloom(),
     sources = CREATOR_SOURCES,
-    shards = 0,
+    shards = 256,
     concurrency = 8,
     onRetry,
     onPace,
@@ -248,6 +248,19 @@ export async function openCreatorIndex({
 
   onEvent?.({ type: 'building', path });
   const index = await buildCreatorIndex(rpcEndpoint, { slot: currentSlot, onProgress, fetchImpl });
+
+  // An index with nobody in it is not an empty answer, it is a broken one: as
+  // a filter it rules out every wallet, and the scan then reports no fees
+  // anywhere. There are millions of coins on the chain, so zero creators means
+  // the read failed in a way that did not raise. Refuse it rather than cache
+  // it and skip every wallet for a day.
+  if (index.added === 0) {
+    throw new Error(
+      `creator index came back empty (${JSON.stringify(index.counts)} accounts read) — ` +
+        'refusing to use it, because an empty index silently skips every wallet',
+    );
+  }
+
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, index.serialize());
   onEvent?.({ type: 'built', path, index });

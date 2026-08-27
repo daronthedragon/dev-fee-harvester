@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -107,7 +107,6 @@ test('the index reads the creator field of both curves and pools', async () => {
   const poolCreators = keys(2);
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
-    shards: 256,
     fetchImpl: stubFetch(
       {
         [PUMP_PROGRAM.toBase58()]: curveCreators,
@@ -144,14 +143,26 @@ test('the index reads the creator field of both curves and pools', async () => {
   }
 });
 
-test('the default is one request per program, not a sharded read', async () => {
+test('sharding is the default, because the single read is truncated in practice', async () => {
   const creators = keys(6);
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }, calls),
   });
-  assert.equal(calls.length, 1, 'the default is a single unfiltered read');
+  assert.equal(calls.length, 256, 'the default splits the read');
+  for (const pk of creators) assert.equal(index.mightBeCreator(pk), true);
+});
+
+test('shards: 0 falls back to a single unfiltered read', async () => {
+  const creators = keys(6);
+  const calls = [];
+  const index = await buildCreatorIndex('http://rpc.test', {
+    shards: 0,
+    sources: [CREATOR_SOURCES[0]],
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }, calls),
+  });
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].config.filters.length, 1, 'no shard filter on it');
   for (const pk of creators) assert.equal(index.mightBeCreator(pk), true);
 });
@@ -239,4 +250,22 @@ test('a corrupt cache is rebuilt rather than trusted', async () => {
   assert.deepEqual(events, ['unreadable', 'building', 'built']);
   // And the bad file was replaced, not left to fail again next run.
   assert.doesNotThrow(() => deserializeCreatorIndex(readFileSync(path)));
+});
+
+test('an index with nobody in it is refused, not cached', async () => {
+  // As a filter an empty index rules out every wallet, so the scan reports no
+  // fees anywhere — a wrong answer that reads exactly like a right one.
+  const dir = mkdtempSync(join(tmpdir(), 'dfh-idx-'));
+  const path = join(dir, 'creators.idx');
+  await assert.rejects(
+    () =>
+      openCreatorIndex({
+        rpcEndpoint: 'http://rpc.test',
+        path,
+        currentSlot: 1,
+        fetchImpl: stubFetch({}),
+      }),
+    /empty/,
+  );
+  assert.equal(existsSync(path), false, 'and nothing was written to disk');
 });

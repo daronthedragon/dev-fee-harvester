@@ -14,13 +14,13 @@
  * windows of the key are already eight independent uniform draws. Hashing them
  * again would cost time to arrive at the same distribution.
  *
- * Sizing: 2^27 bits is 16MB. The 9.3M coins on the chain today were made by
- * 1.58M distinct creators, which fills 9% of it and gives a measured
- * false-positive rate of 4.3e-9 — about one stray lookup per 230 million
- * wallets tested. That is far more headroom than needed, and deliberately so:
- * the filter is sized for a chain that keeps growing, and still stays under 1%
- * at twelve times today's creators. `falsePositiveRate` measures it from the
- * bits actually set rather than leaving it as a claim.
+ * Sizing: 2^27 bits is 16MB. The 13.7M coins on the chain today were made by
+ * 3.47M distinct creators, which fills 18.7% of it and gives a measured
+ * false-positive rate of 1.5e-6 — about one stray lookup per 670,000 wallets
+ * tested. That is deliberate headroom: the filter is sized for a chain that
+ * keeps growing and stays under 1% at five times today's creators.
+ * `falsePositiveRate` measures it from the bits actually set rather than
+ * leaving it as a claim.
  */
 
 const MAGIC = 'DFHBLOOM';

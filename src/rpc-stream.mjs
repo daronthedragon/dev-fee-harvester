@@ -60,6 +60,9 @@ export async function streamProgramAccounts(
   let buf = '';
   let seen = 0;
   let sawResult = false;
+  // The last few characters of the whole response, kept separately because
+  // `buf` is consumed as it is parsed. This is how truncation is detected.
+  let tail = '';
 
   const drain = (final) => {
     for (;;) {
@@ -87,7 +90,9 @@ export async function streamProgramAccounts(
   };
 
   for await (const chunk of res.body) {
-    buf += decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(chunk, { stream: true });
+    buf += text;
+    tail = (tail + text).slice(-16);
 
     if (!sawResult) {
       // Surface an RPC-level error rather than reporting zero accounts. Read
@@ -107,11 +112,31 @@ export async function streamProgramAccounts(
     drain(false);
   }
 
-  buf += decoder.decode();
+  const rest = decoder.decode();
+  buf += rest;
+  tail = (tail + rest).slice(-16);
   drain(true);
 
   if (!sawResult && seen === 0) {
     throw new Error(`getProgramAccounts returned an unrecognised response: ${buf.slice(0, 200)}`);
+  }
+
+  // A response that stops early is the dangerous case, because it does not
+  // look like a failure — it looks like a program with fewer accounts than it
+  // has. An index built from one silently omits creators, and a wallet missing
+  // from the index is money the scan never goes looking for.
+  //
+  // This is not hypothetical. The public endpoint cuts a large read off when
+  // its data allowance runs out, and three reads of the same program returned
+  // counts that summed to more accounts than the program has.
+  //
+  // A complete JSON-RPC response ends with the closing brace of its envelope.
+  // Anything else means the body ended in the middle of one.
+  if (!/\}\s*$/.test(tail)) {
+    throw new Error(
+      `getProgramAccounts response was truncated after ${seen} accounts ` +
+        `(ended with ${JSON.stringify(tail)}, not a closing brace) — the result is incomplete`,
+    );
   }
   return seen;
 }

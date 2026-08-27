@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-213%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -216,19 +216,30 @@ Both legs ran to completion against the public RPC and returned the same twenty 
 
 (20,000 measured at 600 and 162.6s; 100,000 measured above. The million-wallet row is the same arithmetic, not a run.)
 
-The index is built once and cached in `~/.dev-fee-harvester/creators.idx`, then picked up automatically on later runs and rebuilt when it is a day old. `--index-shards 256` splits the build into concurrent per-byte reads, which moved 175k accounts/s against 39k/s for the single stream — but only where the endpoint allows it: `api.mainnet-beta.solana.com` rate-limits 256 filtered calls far harder than two large ones, and the build does not finish there. It is off by default for that reason. Building it reads both programs end to end — 7,984,043 bonding curves and 1,315,827 pools, 236s against the public RPC — which is minutes well spent on a hundred thousand wallets and minutes wasted on five. That is why it is a flag and not the default.
+The index is built once and cached in `~/.dev-fee-harvester/creators.idx`, then picked up automatically on later runs and rebuilt when it is a day old. Building it reads both programs end to end — 12,459,499 bonding curves and 1,281,833 pools, about thirteen minutes against the public RPC — which is time well spent on a hundred thousand wallets and wasted on five. That is why it is a flag and not the default.
+
+The build is split into 256 concurrent reads, one per value of the first byte of the creator field, and that is not for speed. The single-request version was faster and wrong:
+
+|             | accounts read |   creators | time |
+| ----------- | ------------: | ---------: | ---: |
+| one request |     9,299,870 | ~1,583,727 | 236s |
+| 256 shards  |    13,741,332 | ~3,468,078 | 796s |
+
+The public endpoint cuts a large response off when its data allowance runs out, and nothing about that looks like a failure — it looks like a program with fewer accounts than it has. The quick read was quick because it stopped early, and it left out **more than half the creators**, every one of them a wallet the scan would then never go looking for. Shards are small enough to finish. `--index-shards 0` restores the single read.
+
+Truncation is now an error rather than a short answer: a response whose body ends anywhere but at the closing brace of its envelope is rejected, and an index that comes back with nobody in it is refused rather than cached, since as a filter it would rule out every wallet and report no fees anywhere.
 
 **It cannot cost you a wallet.** The creators are far too many to keep, so they are streamed into a Bloom filter: 16MB fixed, whatever the chain does next. A Bloom filter is one-sided — it can say "maybe" about an address that is not in it, but never "no" about one that is. Here the errors land on the harmless side: a false positive is one wasted lookup, and a false negative, which would silently drop a wallet with money in it, cannot happen.
 
 The numbers behind that, measured rather than assumed:
 
-|                            |                                            |
-| -------------------------- | ------------------------------------------ |
-| coins read                 | 9,299,870                                  |
-| distinct creators          | 1,583,727                                  |
-| filter occupancy           | 9.0% of 2^27 bits                          |
-| false-positive rate        | 4.3e-9 — one stray lookup per 230M wallets |
-| peak memory while building | 27 MB                                      |
+|                            |                                               |
+| -------------------------- | --------------------------------------------- |
+| coins read                 | 13,741,332                                    |
+| distinct creators          | ~3,468,078                                    |
+| filter occupancy           | 18.7% of 2^27 bits                            |
+| false-positive rate        | 1.5e-6 — one stray lookup per 670,000 wallets |
+| peak memory while building | 35 MB                                         |
 
 And checked against the chain rather than against the code's own assumptions — a stub that agrees with a wrong offset proves nothing:
 
@@ -441,38 +452,38 @@ A few details that are easy to get wrong, and are pinned by tests:
 
 ## Options
 
-| Flag                 |                                                                          |
-| -------------------- | ------------------------------------------------------------------------ |
-| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files               |
-| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                      |
-| `--payer <key>`      | who pays fees, by label or pubkey                                        |
-| `--min <sol>`        | ignore wallets below this amount                                         |
-| `--all`              | take every claimable wallet, no picker                                   |
-| `--execute`          | actually send. Without it, everything is simulated                       |
-| `--priority-fee <n>` | compute unit price in micro-lamports                                     |
-| `--max-per-tx <n>`   | actions per transaction (default 8)                                      |
-| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                  |
-| `--concurrency <n>`  | parallel RPC requests (default 8)                                        |
-| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)    |
-| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                 |
-| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning  |
-| `--out <file.jsonl>` | append every funded wallet as it is found                                |
-| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                 |
-| `--creator-index`    | read every coin's creator once, then skip wallets that never made one    |
-| `--index-file <p>`   | where that index is cached (default `~/.dev-fee-harvester/creators.idx`) |
-| `--rebuild-index`    | rebuild the creator index even if a fresh one is cached                  |
-| `--index-shards <n>` | split the index build into n concurrent reads (try 256 on a private RPC) |
-| `--find-shares`      | also hunt fees held for you in team sharing configs                      |
-| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                            |
-| `--no-preflight`     | skip the per-action simulation pass                                      |
-| `--json`             | machine-readable scan output                                             |
+| Flag                 |                                                                           |
+| -------------------- | ------------------------------------------------------------------------- |
+| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files                |
+| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                       |
+| `--payer <key>`      | who pays fees, by label or pubkey                                         |
+| `--min <sol>`        | ignore wallets below this amount                                          |
+| `--all`              | take every claimable wallet, no picker                                    |
+| `--execute`          | actually send. Without it, everything is simulated                        |
+| `--priority-fee <n>` | compute unit price in micro-lamports                                      |
+| `--max-per-tx <n>`   | actions per transaction (default 8)                                       |
+| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                   |
+| `--concurrency <n>`  | parallel RPC requests (default 8)                                         |
+| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)     |
+| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                  |
+| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning   |
+| `--out <file.jsonl>` | append every funded wallet as it is found                                 |
+| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                  |
+| `--creator-index`    | read every coin's creator once, then skip wallets that never made one     |
+| `--index-file <p>`   | where that index is cached (default `~/.dev-fee-harvester/creators.idx`)  |
+| `--rebuild-index`    | rebuild the creator index even if a fresh one is cached                   |
+| `--index-shards <n>` | concurrent reads the build is split into (default 256; `0` = one request) |
+| `--find-shares`      | also hunt fees held for you in team sharing configs                       |
+| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                             |
+| `--no-preflight`     | skip the per-action simulation pass                                       |
+| `--json`             | machine-readable scan output                                              |
 
 Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags. `FORCE_COLOR=1` keeps colour when output is piped or recorded; `NO_COLOR` always wins.
 
 ## Development
 
 ```bash
-npm test                    # 209 tests, no network required
+npm test                    # 213 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script

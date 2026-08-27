@@ -169,3 +169,63 @@ test('memory does not grow with the number of accounts', async () => {
   assert.equal(total, 20000);
   assert.equal(count, 20000);
 });
+
+test('a response that stops mid-stream is an error, not a short answer', async () => {
+  // The dangerous shape: the body ends cleanly in the middle of the result
+  // array. Nothing about it looks like a failure — it looks like a program
+  // with fewer accounts than it has, and an index built from it silently
+  // omits creators.
+  const full = JSON.stringify({
+    jsonrpc: '2.0',
+    result: [
+      { pubkey: 'A'.repeat(32), account: { data: ['AAAA', 'base64'] } },
+      { pubkey: 'B'.repeat(32), account: { data: ['BBBB', 'base64'] } },
+      { pubkey: 'C'.repeat(32), account: { data: ['CCCC', 'base64'] } },
+    ],
+    id: 1,
+  });
+  const cut = full.slice(0, Math.floor(full.length * 0.7));
+
+  const seen = [];
+  await assert.rejects(
+    () =>
+      streamProgramAccounts('http://rpc.test', PROGRAM, {
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          body: (async function* () {
+            yield Buffer.from(cut);
+          })(),
+        }),
+        onAccount: (a) => seen.push(a),
+      }),
+    /truncated/,
+  );
+  // And it says how far it got, rather than pretending it got nothing.
+  assert.ok(seen.length >= 1, 'the accounts it did read were still parsed');
+});
+
+test('a complete response is not mistaken for a truncated one', async () => {
+  // Trailing whitespace after the envelope is legal and must not trip it.
+  const body =
+    JSON.stringify({
+      jsonrpc: '2.0',
+      result: [{ pubkey: 'A'.repeat(32), account: { data: ['AAAA', 'base64'] } }],
+      id: 1,
+    }) + '\n';
+  let count = 0;
+  const n = await streamProgramAccounts('http://rpc.test', PROGRAM, {
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      body: (async function* () {
+        // Split across chunks, so the tail is assembled rather than seen whole.
+        yield Buffer.from(body.slice(0, 20));
+        yield Buffer.from(body.slice(20));
+      })(),
+    }),
+    onAccount: () => count++,
+  });
+  assert.equal(n, 1);
+  assert.equal(count, 1);
+});
