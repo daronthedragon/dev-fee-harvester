@@ -341,6 +341,9 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
   if (!args['no-preflight']) {
     const withFees = rows.filter(isActionable);
     const checked = await preflight(connection, withFees, payer.publicKey, {
+      // Preflight simulates the transactions that would actually be sent, so
+      // it has to pack them the same way the sender will.
+      maxPerTx: Number(args['max-per-tx'] ?? 8),
       limiter: shareLimiter,
       onProgress: (n, total) => progress(`preflight ${count(n)}/${count(total)}`),
     });

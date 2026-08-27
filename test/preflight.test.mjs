@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { preflight } from '../src/preflight.mjs';
-import { workItems } from '../src/claim.mjs';
+import { packBatches, workItems } from '../src/claim.mjs';
 
 const BLOCKHASH = '11111111111111111111111111111111';
 const payer = Keypair.generate().publicKey;
@@ -98,4 +98,90 @@ test('one failed check does not condemn a row that also has good work', async ()
   assert.ok(out.partial, 'and the row is flagged as partial');
   assert.equal(out.verifiedLamports, 5e8, 'only the verified half is counted');
   assert.match(out.reason, /could not verify/);
+});
+
+test('a clean run costs one request per transaction, not one per wallet', async () => {
+  // The whole point of the rewrite. Twenty-four wallets pack into three
+  // transactions of eight, and three questions settle all of them.
+  let calls = 0;
+  const chain = chainWith(async () => {
+    calls++;
+    return { value: { err: null } };
+  });
+  const rows = Array.from({ length: 24 }, (_, i) => row(`w${i}`, 1e8));
+  const out = await preflight(chain, rows, payer);
+
+  // One request per transaction that would be sent. How many that is comes
+  // from the packer measuring real serialised sizes, so it is asked rather
+  // than assumed.
+  const expected = packBatches(
+    rows.flatMap((r) => workItems(r, payer)),
+    payer,
+    { blockhash: BLOCKHASH },
+  ).length;
+  assert.ok(expected < 24, `the packer should batch these, it made ${expected} transactions`);
+  assert.equal(calls, expected, `expected ${expected} simulations for 24 wallets, made ${calls}`);
+  assert.equal(out.length, 24);
+  assert.ok(
+    out.every((r) => r.status === 'ready'),
+    'every wallet cleared',
+  );
+});
+
+test('the chain names the failing instruction, and only its owner is blocked', async () => {
+  // Solana returns InstructionError: [index, err]. Nothing after that index
+  // runs, so the survivors have to be asked again rather than assumed guilty.
+  const rows = Array.from({ length: 8 }, (_, i) => row(`w${i}`, 1e8));
+  const bad = rows[3].publicKey.toBase58();
+
+  let calls = 0;
+  const chain = chainWith(async (tx) => {
+    calls++;
+    const keys = tx.message.compiledInstructions.map((ix) =>
+      tx.message.staticAccountKeys[ix.programIdIndex].toBase58(),
+    );
+    // Find which instruction belongs to the bad wallet by account presence.
+    const idx = tx.message.compiledInstructions.findIndex((ix) =>
+      ix.accountKeyIndexes.some((k) => tx.message.staticAccountKeys[k].toBase58() === bad),
+    );
+    void keys;
+    if (idx === -1) return { value: { err: null } };
+    return { value: { err: { InstructionError: [idx, { Custom: 6050 }] } } };
+  });
+
+  const out = await preflight(chain, rows, payer);
+  const blocked = out.filter((r) => r.status === 'blocked');
+  const ready = out.filter((r) => r.status === 'ready');
+
+  assert.equal(blocked.length, 1, `expected exactly one blocked row, got ${blocked.length}`);
+  assert.equal(blocked[0].label, 'w3');
+  assert.match(blocked[0].reason, /sharing config/i);
+  assert.equal(ready.length, 7, 'the other seven were re-checked and cleared');
+  // One per transaction, plus one re-check of the survivors after the bad
+  // item was named. Not one per wallet.
+  const batches = packBatches(
+    rows.flatMap((r) => workItems(r, payer)),
+    payer,
+    { blockhash: BLOCKHASH },
+  ).length;
+  assert.equal(calls, batches + 1, `expected ${batches + 1} simulations, made ${calls}`);
+  assert.ok(calls < rows.length, `${calls} simulations for ${rows.length} wallets is not a saving`);
+});
+
+test('a failure that names no instruction is narrowed down by halving', async () => {
+  // InvalidAccountForFee is about the transaction, not anything in it, so
+  // there is nothing to attribute and each item has to be asked on its own.
+  const rows = Array.from({ length: 4 }, (_, i) => row(`w${i}`, 1e8));
+  const bad = rows[2].publicKey.toBase58();
+  const chain = chainWith(async (tx) => {
+    const involved = tx.message.staticAccountKeys.some((k) => k.toBase58() === bad);
+    return { value: { err: involved ? 'InvalidAccountForFee' : null } };
+  });
+
+  const out = await preflight(chain, rows, payer);
+  assert.deepEqual(
+    out.map((r) => r.status),
+    ['ready', 'ready', 'blocked', 'ready'],
+  );
+  assert.match(out[2].reason, /InvalidAccountForFee/);
 });

@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-206%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -115,7 +115,7 @@ It binds to `127.0.0.1` only and every API call carries a token minted at startu
 flowchart LR
   A[wallets.json<br/>or .jsonl] -->|streamed in batches| B[scan]
   B -->|drops empty wallets| C[funded wallets only]
-  C --> D[preflight<br/>simulate each action]
+  C --> D[preflight<br/>simulate the real batches]
   D -->|ready| E[pack by measured size]
   D -->|blocked| X[reported, excluded]
   E --> F[sign + send<br/>~8 actions per tx]
@@ -127,7 +127,25 @@ Two decisions do most of the work.
 
 **Batches are packed by measurement, not by guesswork.** Every extra signer costs 64 bytes of signature plus 32 of pubkey, and a distribution carries one account per shareholder, so each candidate batch is compiled and its real serialised length checked against Solana's 1232-byte limit before another action is added. In practice that is ~8 actions per transaction: forty wallets settle in five transactions instead of forty.
 
-**Every action is simulated on its own first.** One reverting claim would otherwise fail the whole transaction and nobody gets paid. Anything the chain rejects is dropped from the batch and reported with the program's own explanation.
+**Everything is simulated before anything is sent.** One reverting claim would otherwise fail the whole transaction and nobody gets paid. Anything the chain rejects is dropped from the batch and reported with the program's own explanation.
+
+**Preflight asks in bulk, not wallet by wallet.** It used to simulate every unit of work on its own — one request per item, whether or not anything was wrong, and almost nothing ever is. Now the items are packed into exactly the transactions that would be sent and each is simulated once. A clean batch clears every item in it at once. A failing one names the instruction that failed (`InstructionError: [index, err]`), so the offender is identified directly, dropped, and the rest asked again — nothing after a failing instruction runs, so the survivors have to be re-checked rather than assumed guilty. The cost stops tracking how much work there is and starts tracking how much of it is broken.
+
+Measured on 40 real mainnet wallets with fees waiting:
+
+```
+  one per item     87 simulations  23.1s
+  batched           9 simulations   0.3s
+
+  fewer requests  9.7x
+  faster          81.3x
+  old run could not check 1 wallet(s) the new run verified - 0.201562 SOL
+  NOTHING GOT WORSE: yes
+```
+
+That last line is the one that matters. The two runs do not agree, and they are not supposed to: the old pass made enough requests to get itself rate-limited, and a wallet it could not check is money written off. Making 9 requests instead of 87 is not only quicker, it stops the tool from throttling itself into saying "unverified" about a wallet that was fine. What is checked is that nothing got _worse_ — no wallet the old pass cleared is now blocked, and none is worth less than before.
+
+Batching is not allowed to make items share a fate they did not share before. If a simulation request itself fails, the batch is halved and asked again rather than marked unverified wholesale, so one item's bad luck cannot condemn the seven next to it.
 
 A rejection and a failed check are held apart. If a simulation cannot be run — a rate limit, a dropped connection — the row is marked `unchecked`, not `blocked`, because "the chain refused this" and "we could not ask" are very different claims to make about someone's money. Unverified work stays out of batches either way.
 
@@ -454,7 +472,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 206 tests, no network required
+npm test                    # 209 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script

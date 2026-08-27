@@ -1,7 +1,7 @@
 import { TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { WSOL_MINT } from './constants.mjs';
 import { PROGRAM_ERRORS } from './errors.mjs';
-import { isActionable, workItems } from './claim.mjs';
+import { isActionable, packBatches, workItems } from './claim.mjs';
 import { createLimiter, withRetry } from './limit.mjs';
 
 /** Turn a raw simulation error into something a human can act on. */
@@ -23,24 +23,48 @@ export function explainError(err) {
 }
 
 /**
- * Simulate each unit of work on its own before batching.
+ * Find the work the chain will reject, before it takes anything else down.
  *
  * This exists because a meaningful share of real creators have migrated their
  * fees to a sharing config, and for those the plain claim reverts (6050).
- * Without this pass a single bad item takes down every other item sharing its
- * transaction — so we find out per item, cheaply, first.
+ * A single bad item fails every other item sharing its transaction, so the bad
+ * ones have to be found first.
  *
- * Per *item* rather than per wallet: a wallet holding a dozen distributions
- * cannot simulate them in one transaction, and judging the wallet as a whole
- * would wrongly condemn work that is perfectly valid on its own.
+ * The obvious way is to simulate every item on its own, and that is what this
+ * did: one request per item, whether or not anything was wrong. It is the
+ * wrong shape, because almost everything is fine and each of those requests
+ * buys a "yes".
+ *
+ * So it asks the question in bulk. Items are packed into exactly the
+ * transactions that would be sent, and each is simulated once. A batch that
+ * simulates clean clears every item in it at once. A batch that fails says
+ * which instruction failed — Solana returns `InstructionError: [index, err]`
+ * — so the offender is identified directly, dropped, and the rest re-checked.
+ * Nothing after a failing instruction runs, which is exactly why the rest must
+ * be asked again rather than assumed guilty.
+ *
+ * The cost stops tracking how much work there is and starts tracking how much
+ * of it is broken: one request per transaction, plus about two per bad item.
+ *
+ * A transaction-level failure — `InvalidAccountForFee` and friends — names no
+ * instruction, because it is about the transaction rather than anything in it.
+ * There is nothing to attribute, so that batch falls back to halving until
+ * each item has been asked about on its own.
  *
  * "The chain rejected this" and "we could not ask the chain" are tracked
- * separately. Collapsing them means one rate-limited request marks claimable
- * money as permanently blocked, which is the same silent-loss failure this
- * pass exists to prevent.
+ * separately throughout. Collapsing them means one rate-limited request marks
+ * claimable money as permanently blocked, which is the same silent-loss
+ * failure this pass exists to prevent.
  */
 export async function preflight(connection, rows, payer, options = {}) {
-  const { concurrency = 6, quoteMint = WSOL_MINT, onProgress, limiter } = options;
+  const {
+    concurrency = 6,
+    quoteMint = WSOL_MINT,
+    onProgress,
+    limiter,
+    maxPerTx = 8,
+    onRequest,
+  } = options;
   const { blockhash } = await connection.getLatestBlockhash();
   const gate = limiter ?? createLimiter({ concurrency });
 
@@ -54,51 +78,140 @@ export async function preflight(connection, rows, payer, options = {}) {
 
   const jobs = [];
   for (const row of out) {
-    for (const item of workItems(row, payer, quoteMint)) jobs.push({ row, item });
+    for (const item of workItems(row, payer, quoteMint)) jobs.push(item);
   }
 
-  let done = 0;
+  const record = (item, rejected, unverified) => {
+    const row = item.row;
+    if (item.kind === 'claim') {
+      row.directBlocked = rejected;
+      row.directUnverified = unverified;
+    } else {
+      const d = row.distributions.find((x) => x.mint.equals(item.mint));
+      if (d) {
+        d.blocked = rejected;
+        d.unverified = unverified;
+      }
+    }
+  };
+
+  let settled = 0;
+  const settle = (items, rejected, unverified) => {
+    for (const item of items) record(item, rejected, unverified);
+    settled += items.length;
+    onProgress?.(settled, jobs.length);
+  };
+
+  const batches = packBatches(jobs, payer, { blockhash, maxPerTx });
   await Promise.all(
-    jobs.map(({ row, item }) =>
-      gate(async () => {
-        const { rejected, unverified } = await checkItem(connection, item, payer, blockhash);
-        if (item.kind === 'claim') {
-          row.directBlocked = rejected;
-          row.directUnverified = unverified;
-        } else {
-          const d = row.distributions.find((x) => x.mint.equals(item.mint));
-          if (d) {
-            d.blocked = rejected;
-            d.unverified = unverified;
-          }
-        }
-        onProgress?.(++done, jobs.length);
-      }),
+    batches.map((batch) =>
+      // An oversized batch could never be sent, so there is nothing to ask the
+      // chain about it.
+      batch.oversized
+        ? settle(batch.items, 'transaction is too large to send even on its own', null)
+        : resolveBatch(connection, batch.items, payer, blockhash, gate, settle, onRequest),
     ),
   );
 
   return out.map((row) => summarise(row));
 }
 
-async function checkItem(connection, item, payer, blockhash) {
+/**
+ * Simulate one batch, and keep asking until every item in it has a verdict.
+ */
+async function resolveBatch(connection, items, payer, blockhash, gate, settle, onRequest) {
+  if (items.length === 0) return;
+
+  const { err, failed, unverified } = await gate(() =>
+    simulate(connection, items, payer, blockhash, onRequest),
+  );
+
+  if (items.length === 1) {
+    return settle(items, unverified ? null : explainError(err), unverified ?? null);
+  }
+  if (!unverified && !err) return settle(items, null, null);
+
+  // A request that never landed says nothing about any particular item, and
+  // batching must not make one item's bad luck condemn the others. Split, so
+  // an unverifiable item is isolated to itself. Costs nothing when the
+  // endpoint is healthy, and no more than asking item by item when it is not.
+  if (unverified) return halve(connection, items, payer, blockhash, gate, settle, onRequest);
+
+  if (failed !== null && failed < items.length) {
+    // The chain named the instruction. Condemn only its owner, then ask about
+    // the rest — they never ran, so nothing is known about them yet.
+    settle([items[failed]], explainError(err), null);
+    return resolveBatch(
+      connection,
+      items.filter((_, i) => i !== failed),
+      payer,
+      blockhash,
+      gate,
+      settle,
+      onRequest,
+    );
+  }
+
+  // Nothing to attribute it to. Halve and ask again.
+  return halve(connection, items, payer, blockhash, gate, settle, onRequest);
+}
+
+async function halve(connection, items, payer, blockhash, gate, settle, onRequest) {
+  const mid = Math.ceil(items.length / 2);
+  await Promise.all([
+    resolveBatch(connection, items.slice(0, mid), payer, blockhash, gate, settle, onRequest),
+    resolveBatch(connection, items.slice(mid), payer, blockhash, gate, settle, onRequest),
+  ]);
+}
+
+/**
+ * Simulate the given items as one transaction.
+ *
+ * Returns the raw error plus which *item* it belongs to. Solana counts the
+ * instruction, and an item can be several instructions — a PumpSwap claim
+ * carries its own ATA creation — so the index has to be mapped back through
+ * the item boundaries rather than used directly.
+ */
+async function simulate(connection, items, payer, blockhash, onRequest) {
+  const instructions = items.flatMap((i) => i.instructions);
   const tx = new VersionedTransaction(
     new TransactionMessage({
       payerKey: payer,
       recentBlockhash: blockhash,
-      instructions: item.instructions,
+      instructions,
     }).compileToV0Message(),
   );
+
   try {
     const sim = await withRetry(
-      () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true }),
+      () => {
+        onRequest?.();
+        return connection.simulateTransaction(tx, {
+          sigVerify: false,
+          replaceRecentBlockhash: true,
+        });
+      },
       { attempts: 4, baseDelayMs: 400 },
     );
-    return { rejected: sim.value.err ? explainError(sim.value.err) : null, unverified: null };
+    const err = sim.value.err ?? null;
+    return { err, failed: err ? itemOf(items, err) : null, unverified: null };
   } catch (err) {
     // The request never landed. That says nothing about whether the claim
     // would work, so it must not be recorded as a rejection.
-    return { rejected: null, unverified: `could not verify — ${err.message}` };
+    return { err: null, failed: null, unverified: `could not verify — ${err.message}` };
   }
+}
+
+/** Map an InstructionError's instruction index back to the item that owns it. */
+function itemOf(items, err) {
+  const index = err?.InstructionError?.[0];
+  if (typeof index !== 'number') return null;
+  let seen = 0;
+  for (let i = 0; i < items.length; i++) {
+    seen += items[i].instructions.length;
+    if (index < seen) return i;
+  }
+  return null;
 }
 
 /** Roll per-item verdicts back up into one status for the row. */
