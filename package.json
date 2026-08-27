@@ -30,7 +30,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "browsers:install": "playwright-core install firefox webkit",
-    "verify:onchain": "node scripts/verify-onchain.mjs"
+    "verify:onchain": "node scripts/verify-onchain.mjs",
+    "build:demo": "node scripts/build-demo.mjs"
   },
   "keywords": [
     "solana",

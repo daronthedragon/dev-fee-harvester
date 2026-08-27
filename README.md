@@ -83,6 +83,8 @@ node bin/harvest.mjs claim --all --execute --priority-fee 50000
 
 ## Dashboard
 
+**[Try it →](https://daronthedragon.github.io/dev-fee-harvester/)** — the real dashboard on sample data, no install and no chain access.
+
 ```bash
 node bin/harvest.mjs dashboard
 ```

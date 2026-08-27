@@ -1,0 +1,61 @@
+name: pages
+
+# Publishes the static dashboard demo to GitHub Pages.
+#
+# The page is built from web/index.html rather than kept as a second copy, so
+# it cannot drift from the real dashboard without the build failing. It is
+# published only after the tests that drive it in a browser have passed —
+# a broken demo is worse than none, because it looks like a broken tool.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'scripts/build-demo.mjs'
+      - 'test/demo.test.mjs'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a half-finished deploy; queue behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Chromium comes from Playwright here; the demo tests skip without it,
+      # and a skipped test would let a broken page through.
+      - run: npx playwright-core install --with-deps chromium
+      - name: Test the demo in a browser
+        run: node --test test/demo.test.mjs
+
+      - run: node scripts/build-demo.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
