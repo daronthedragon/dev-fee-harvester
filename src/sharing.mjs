@@ -446,7 +446,11 @@ export async function buildShareholderBloom(rpcEndpoint, options = {}) {
 
   // The tail the slice could not reach. Skipping it would drop shareholders
   // sitting past the second slot, which is the one failure this must not have.
-  const tail = await fetchConfigs({ ...connection, rpcEndpoint }, overflow, run);
+  // Passed through as-is. Spreading it into a new object drops every method,
+  // because a Connection keeps them on the prototype rather than as own
+  // properties — which typechecks, unit-tests green against a plain stub, and
+  // fails only once a real client meets a config with an overflowing tail.
+  const tail = await fetchConfigs(connection, overflow, run);
   for (const cfg of tail) for (const sh of cfg.shareholders) bloom.add(sh.address.toBuffer());
 
   onProgress?.({ configs: scanned, overflow: overflow.length, done: true });

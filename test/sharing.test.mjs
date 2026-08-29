@@ -487,3 +487,55 @@ test('the shareholder filter reaches past the slice, into the configs that hold 
     assert.equal(bloom.has(pk.toBuffer()), true, `${pk.toBase58()} missing from the filter`);
   }
 });
+
+test('the overflow pass works with a real client, not just a plain stub', async () => {
+  // Regression: the connection was spread into a new object, which keeps own
+  // properties and drops prototype methods. A stub written as an object
+  // literal has its methods as own properties, so it passed; a real Connection
+  // does not, and the nightly build died on it.
+  class ClientLikeConnection {
+    async getMultipleAccountsInfo() {
+      return [];
+    }
+  }
+  const client = new ClientLikeConnection();
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(client, 'getMultipleAccountsInfo'),
+    false,
+    'the method must live on the prototype for this test to mean anything',
+  );
+
+  const bloom = createBloom({ log2Bits: 16 });
+  const holder = Keypair.generate().publicKey;
+  const config = Buffer.alloc(1024);
+  Buffer.from(SHARING_CONFIG_DISCRIMINATOR).copy(config, 0);
+  config.writeUInt32LE(5, 76); // more shareholders than the slice reaches
+  holder.toBuffer().copy(config, 80);
+
+  await buildShareholderBloom('http://rpc.test', {
+    bloom,
+    connection: client,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      body: (async function* () {
+        yield Buffer.from(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            result: [
+              {
+                pubkey: Keypair.generate().publicKey.toBase58(),
+                account: {
+                  data: [config.subarray(76, 76 + 4 + 2 * 34).toString('base64'), 'base64'],
+                },
+              },
+            ],
+            id: 1,
+          }),
+        );
+      })(),
+    }),
+  });
+
+  assert.equal(bloom.has(holder.toBuffer()), true);
+});
