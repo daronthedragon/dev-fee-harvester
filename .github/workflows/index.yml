@@ -1,0 +1,64 @@
+name: refresh creator index
+
+# Rebuilds the published creator index and replaces the release asset.
+#
+# The index is a snapshot of every coin creator on the chain, and the tool
+# downloads it so a first run is seconds rather than minutes. A snapshot goes
+# stale, so it is rebuilt on a schedule.
+#
+# Publishing a bad index is worse than publishing none. A short or wrong filter
+# does not give anyone an error — it gives them a scan that finds no fees. So
+# the build script has to clear its own gates (does it describe this chain, and
+# did it read at least as much as the index already published) and exits
+# non-zero if not. The upload step only runs on success, so a failed run leaves
+# the previous index in place rather than replacing it with a worse one.
+#
+# Set an `RPC` secret to a private endpoint if the public one proves too slow
+# or too rate-limited to finish here.
+
+on:
+  schedule:
+    # Daily, well away from the top of the hour where every cron piles up.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One refresh at a time; a second would race the first for the same asset.
+concurrency:
+  group: refresh-index
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-22.04
+    # The build reads both programs end to end. It took ~13 minutes locally
+    # against the public RPC; this leaves room for a slower runner without
+    # letting a wedged run burn an hour.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build and check the index
+        env:
+          RPC: ${{ secrets.RPC }}
+        run: node scripts/build-index.mjs --out creators.idx.gz
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload index creators.idx.gz --clobber
+
+      - name: Report what was published
+        run: |
+          echo "### Creator index refreshed" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh creators.idx.gz | awk '{print "size   " $5}' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum creators.idx.gz | awk '{print "sha256 " $1}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

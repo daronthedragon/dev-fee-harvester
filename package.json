@@ -31,7 +31,8 @@
     "format:check": "prettier --check .",
     "browsers:install": "playwright-core install firefox webkit",
     "verify:onchain": "node scripts/verify-onchain.mjs",
-    "build:demo": "node scripts/build-demo.mjs"
+    "build:demo": "node scripts/build-demo.mjs",
+    "build:index": "node scripts/build-index.mjs"
   },
   "keywords": [
     "solana",

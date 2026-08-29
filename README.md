@@ -244,6 +244,15 @@ Not all of them, and the threshold is the point. Every index is a snapshot and p
 
 What that proves is that the filter describes _this_ chain. It does not prove the filter is complete, and no snapshot ever is: it trails the chain by however old it is. That is why the creator index is a flag rather than the default, and why `--no-creator-index` asks about every wallet instead. `--no-index-download` always builds locally.
 
+The published index is rebuilt nightly by [a scheduled workflow](.github/workflows/index.yml), because a snapshot goes stale. It has to clear its own gates before it replaces anything: it must still describe the chain, and it must have read **at least as many accounts as the index already published** — the chain does not shrink, so a smaller read is a truncated one, and that is exactly the failure a nightly job would otherwise repeat forever. A run that fails a gate uploads nothing and leaves the previous index in place:
+
+```
+against published: 13,741,332 -> 9,300,000 accounts (-32.32%)
+
+REFUSING TO PUBLISH: this build read 32.3% fewer accounts than the published
+index. The chain does not shrink, so this read did not finish.
+```
+
 Truncation is now an error rather than a short answer: a response whose body ends anywhere but at the closing brace of its envelope is rejected, and an index that comes back with nobody in it is refused rather than cached, since as a filter it would rule out every wallet and report no fees anywhere.
 
 **It cannot cost you a wallet.** The creators are far too many to keep, so they are streamed into a Bloom filter: 16MB fixed, whatever the chain does next. A Bloom filter is one-sided — it can say "maybe" about an address that is not in it, but never "no" about one that is. Here the errors land on the harmless side: a false positive is one wasted lookup, and a false negative, which would silently drop a wallet with money in it, cannot happen.
