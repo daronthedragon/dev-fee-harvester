@@ -26,11 +26,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { PUMP_PROGRAM, PUMPSWAP_PROGRAM } from './constants.mjs';
-import { createBloom, deserializeBloom } from './bloom.mjs';
+import { createBloom, readBloomAt } from './bloom.mjs';
 import { encodeBase58 } from './base58.mjs';
 import { streamProgramAccounts } from './rpc-stream.mjs';
+import { buildShareholderBloom } from './sharing.mjs';
 import { createAdaptiveLimiter } from './limit.mjs';
 
 /**
@@ -57,7 +58,9 @@ export const CREATOR_SOURCES = [
   },
 ];
 
-const MAGIC = 'DFHCIDX1';
+const MAGIC = 'DFHCIDX2';
+/** Version 1 held only the creator filter; it is rebuilt rather than read. */
+const LEGACY_MAGIC = 'DFHCIDX1';
 const HEADER_BYTES = 64;
 
 /** An address with no coins of its own is 32 zero bytes, and means "none". */
@@ -116,6 +119,11 @@ export async function buildCreatorIndex(rpcEndpoint, options = {}) {
     concurrency = 8,
     onRetry,
     onPace,
+    // The shareholder filter answers "could this wallet hold a share in
+    // anyone's config?", which is what lets the share scan be skipped.
+    withShareholders = true,
+    shareholderBloom = createBloom(),
+    connection,
   } = options;
 
   // The width is a starting guess, not a setting: it moves to whatever the
@@ -163,14 +171,28 @@ export async function buildCreatorIndex(rpcEndpoint, options = {}) {
     onProgress?.(source.name, seen);
   }
 
-  return makeIndex(bloom, slot, counts);
+  if (withShareholders) {
+    const sh = await buildShareholderBloom(rpcEndpoint, {
+      bloom: shareholderBloom,
+      // The overflow pass refetches whole accounts, which needs a real
+      // client rather than the raw endpoint the stream uses.
+      connection: connection ?? new Connection(rpcEndpoint, 'confirmed'),
+      fetchImpl,
+      onProgress: (e) => onProgress?.('sharing configs', e.configs),
+    });
+    counts['sharing configs'] = sh.configs;
+    onProgress?.('sharing configs', sh.configs);
+  }
+
+  return makeIndex(bloom, slot, counts, withShareholders ? shareholderBloom : null);
 }
 
-function makeIndex(bloom, slot, counts) {
+function makeIndex(bloom, slot, counts, shareholders = null) {
   return {
     slot,
     counts,
     bloom,
+    shareholders,
     get added() {
       return bloom.added;
     },
@@ -184,6 +206,16 @@ function makeIndex(bloom, slot, counts) {
       return bloom.has(key instanceof PublicKey ? key.toBuffer() : key);
     },
 
+    /**
+     * False when the address certainly holds no share in anyone's sharing
+     * config. Null when this index carries no shareholder filter, which is not
+     * the same as "no" and must not be treated as one.
+     */
+    mightBeShareholder(key) {
+      if (!shareholders) return null;
+      return shareholders.has(key instanceof PublicKey ? key.toBuffer() : key);
+    },
+
     serialize() {
       const header = Buffer.alloc(HEADER_BYTES);
       header.write(MAGIC, 0, 'ascii');
@@ -192,7 +224,11 @@ function makeIndex(bloom, slot, counts) {
       for (let i = 0; i < names.length && i < 4; i++) {
         header.writeBigUInt64LE(BigInt(counts[names[i]]), 16 + i * 8);
       }
-      return Buffer.concat([header, bloom.serialize()]);
+      return Buffer.concat([
+        header,
+        bloom.serialize(),
+        ...(shareholders ? [shareholders.serialize()] : []),
+      ]);
     },
   };
 }
@@ -387,13 +423,27 @@ export async function verifyCreatorIndex(
 
 /** Rebuild an index written by `serialize()`. */
 export function deserializeCreatorIndex(buf) {
-  if (buf.length < HEADER_BYTES || buf.toString('ascii', 0, 8) !== MAGIC) {
-    throw new Error('not a creator index file');
+  if (buf.length < HEADER_BYTES) throw new Error('not a creator index file');
+  const magic = buf.toString('ascii', 0, 8);
+  if (magic === LEGACY_MAGIC) {
+    throw new Error('creator index is the older format without a shareholder filter');
   }
+  if (magic !== MAGIC) throw new Error('not a creator index file');
+
   const slot = Number(buf.readBigUInt64LE(8));
   const counts = {
     'bonding curves': Number(buf.readBigUInt64LE(16)),
     pools: Number(buf.readBigUInt64LE(24)),
   };
-  return makeIndex(deserializeBloom(buf.subarray(HEADER_BYTES)), slot, counts);
+  // Written by builds that also read the sharing configs; zero on ones that
+  // did not, and left out rather than reported as an honest zero.
+  const configs = Number(buf.readBigUInt64LE(32));
+  if (configs > 0) counts['sharing configs'] = configs;
+
+  const first = readBloomAt(buf, HEADER_BYTES);
+  // The shareholder filter is optional, so an index without one still loads —
+  // it simply cannot answer the shareholder question, and says so with null
+  // rather than with a "no".
+  const shareholders = first.next < buf.length ? readBloomAt(buf, first.next).bloom : null;
+  return makeIndex(first.bloom, slot, counts, shareholders);
 }

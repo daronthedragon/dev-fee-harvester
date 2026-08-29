@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-225%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -244,6 +244,22 @@ Not all of them, and the threshold is the point. Every index is a snapshot and p
 
 What that proves is that the filter describes _this_ chain. It does not prove the filter is complete, and no snapshot ever is: it trails the chain by however old it is. That is why the creator index is a flag rather than the default, and why `--no-creator-index` asks about every wallet instead. `--no-index-download` always builds locally.
 
+### The fees people were leaving behind
+
+Fee-sharing money is invisible to a per-wallet scan — the wallet holding the share has no balance of its own — so it lived behind `--find-shares`. Anyone who never passed that flag never learned the money was there, which is the worst way for a tool like this to fail.
+
+Finding it means reading every sharing config on the chain: a flat 24 seconds however many wallets you own. Cheap per wallet, too expensive to do on every scan, hence the flag.
+
+So the published index carries a second filter: **is this address a shareholder anywhere at all?** For almost everyone the answer is no for every wallet they own, and the entire 24-second read is skipped without asking the chain anything:
+
+```
+no shares held by any of 1,204 wallet(s) - skipping the config scan
+```
+
+That made it affordable to look by default. `--no-find-shares` opts out.
+
+The filter answers `false`, `true`, or `null`, and the third one matters: `null` means this index carries no shareholder filter, which is not the same as "no". Only a definite `false` for every wallet allows skipping — an index that cannot answer runs the full scan. Making `null` behave like `false` fails a test, because it would silently skip the hunt for everyone.
+
 The published index is rebuilt nightly by [a scheduled workflow](.github/workflows/index.yml), because a snapshot goes stale. It has to clear its own gates before it replaces anything: it must still describe the chain, and it must have read **at least as many accounts as the index already published** — the chain does not shrink, so a smaller read is a truncated one, and that is exactly the failure a nightly job would otherwise repeat forever. A run that fails a gate uploads nothing and leaves the previous index in place:
 
 ```
@@ -370,7 +386,7 @@ When a creator splits fees with a team, pump.fun sets `bonding_curve.creator` to
 
 Two consequences, both of which cost money if ignored.
 
-**Those fees are invisible to a per-wallet scan.** The vault is not derived from any wallet you hold, so a normal scan reports zero while real SOL sits in a vault that names you as a shareholder. `--find-shares` hunts for configs where one of your wallets is a shareholder:
+**Those fees are invisible to a per-wallet scan.** The vault is not derived from any wallet you hold, so a scan that only looks at your wallets reports zero while real SOL sits in a vault that names you as a shareholder. That hunt now runs by default — it used to need `--find-shares`, which is exactly why people missed this — and `--no-find-shares` turns it off:
 
 <div align="center">
   <img src="assets/shares.gif" width="900" alt="The same two wallets scanned twice. Without --find-shares the total is 0.018161 SOL and one wallet is listed. With the flag a second wallet appears holding fourteen shares in other creators fee-sharing configs, each line showing what the crank releases and what this wallet receives, for a total of 3.744895 SOL">
@@ -511,7 +527,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 221 tests, no network required
+npm test                    # 225 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script

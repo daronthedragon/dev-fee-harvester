@@ -148,17 +148,36 @@ export function foldBloom(bloom, log2Bits) {
  * which would look exactly like a chain with no creators on it.
  */
 export function deserializeBloom(buf) {
-  if (buf.length < HEADER_BYTES || buf.toString('ascii', 0, 8) !== MAGIC) {
+  const { bloom, next } = readBloomAt(buf, 0);
+  if (next !== buf.length) {
+    throw new Error(`bloom file is ${buf.length} bytes, expected ${next}`);
+  }
+  return bloom;
+}
+
+/**
+ * Read one filter starting at `offset`, and say where it ends.
+ *
+ * The header carries the size, so filters can be stored back to back — which
+ * is how one index file holds both the creators and the shareholders without
+ * needing a length prefix that could disagree with the header.
+ */
+export function readBloomAt(buf, offset) {
+  if (buf.length < offset + HEADER_BYTES || buf.toString('ascii', offset, offset + 8) !== MAGIC) {
     throw new Error('not a bloom filter file');
   }
-  const version = buf.readUInt8(8);
+  const version = buf.readUInt8(offset + 8);
   if (version !== VERSION) throw new Error(`bloom file version ${version}, expected ${VERSION}`);
-  const log2Bits = buf.readUInt8(9);
-  const hashes = buf.readUInt8(10);
+  const log2Bits = buf.readUInt8(offset + 9);
+  const hashes = buf.readUInt8(offset + 10);
   const expected = 2 ** log2Bits / 8;
-  const bits = buf.subarray(HEADER_BYTES);
+  const start = offset + HEADER_BYTES;
+  const bits = buf.subarray(start, start + expected);
   if (bits.length !== expected) {
     throw new Error(`bloom file is ${bits.length} bytes of bitmap, expected ${expected}`);
   }
-  return fromParts(log2Bits, hashes, Buffer.from(bits), Number(buf.readBigUInt64LE(16)));
+  return {
+    bloom: fromParts(log2Bits, hashes, Buffer.from(bits), Number(buf.readBigUInt64LE(offset + 16))),
+    next: start + expected,
+  };
 }

@@ -124,6 +124,7 @@ test('the index reads the creator field of both curves and pools', async () => {
   const poolCreators = keys(2);
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
+    withShareholders: false,
     fetchImpl: stubFetch(
       {
         [PUMP_PROGRAM.toBase58()]: curveCreators,
@@ -164,6 +165,7 @@ test('sharding is the default, because the single read is truncated in practice'
   const creators = keys(6);
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
+    withShareholders: false,
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }, calls),
   });
@@ -176,6 +178,7 @@ test('shards: 0 falls back to a single unfiltered read', async () => {
   const calls = [];
   const index = await buildCreatorIndex('http://rpc.test', {
     shards: 0,
+    withShareholders: false,
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }, calls),
   });
@@ -190,6 +193,7 @@ test('coins with no creator set do not enter the index', async () => {
   const zero = new PublicKey(new Uint8Array(32));
   const real = keys(1)[0];
   const index = await buildCreatorIndex('http://rpc.test', {
+    withShareholders: false,
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: [zero, real, zero] }),
   });
   assert.equal(index.counts['bonding curves'], 3, 'all three were seen');
@@ -201,6 +205,7 @@ test('an index survives a round trip through a file', async () => {
   const creators = keys(4);
   const index = await buildCreatorIndex('http://rpc.test', {
     slot: 123456,
+    withShareholders: false,
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }),
   });
   const restored = deserializeCreatorIndex(index.serialize());
@@ -349,6 +354,7 @@ test('a published index is downloaded instead of built', async () => {
   // Everything the chain will hand back for the check must be in the index.
   const built = await buildCreatorIndex('http://rpc.test', {
     slot: 900,
+    withShareholders: false,
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
   });
@@ -376,6 +382,7 @@ test('an index that does not match the chain is rejected and built instead', asy
   const path = join(dir, 'creators.idx');
   const wrong = await buildCreatorIndex('http://rpc.test', {
     slot: 900,
+    withShareholders: false,
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: shardKeys(50) }),
   });
@@ -399,6 +406,7 @@ test('an index that does not match the chain is rejected and built instead', asy
 test('the check reads real creators and measures how many the index knows', async () => {
   const chainCreators = shardKeys(40);
   const good = await buildCreatorIndex('http://rpc.test', {
+    withShareholders: false,
     sources: [CREATOR_SOURCES[0]],
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
   });
@@ -463,4 +471,50 @@ test('a download that fails falls through to building, it does not abort', async
   });
   assert.deepEqual(events, ['download-failed', 'building', 'built']);
   assert.ok(index.added > 0);
+});
+
+test('an index without a shareholder filter answers null, never "no"', () => {
+  // "I do not know" and "definitely not" must not be the same value: treating
+  // the first as the second would skip the share scan for everyone.
+  const bloom = createBloom({ log2Bits: 16 });
+  const index = deserializeCreatorIndex(
+    Buffer.concat([Buffer.alloc(64).fill(0), bloom.serialize()]).fill(
+      Buffer.from('DFHCIDX2', 'ascii'),
+      0,
+      8,
+    ),
+  );
+  assert.equal(index.shareholders, null);
+  assert.equal(index.mightBeShareholder(keys(1)[0]), null);
+});
+
+test('the shareholder filter rides along in the same file', () => {
+  const creators = createBloom({ log2Bits: 18 });
+  const holders = createBloom({ log2Bits: 17 });
+  const creator = keys(1)[0];
+  const holder = keys(1)[0];
+  creators.add(creator.toBuffer());
+  holders.add(holder.toBuffer());
+
+  const header = Buffer.alloc(64);
+  header.write('DFHCIDX2', 0, 'ascii');
+  header.writeBigUInt64LE(7n, 8);
+  const index = deserializeCreatorIndex(
+    Buffer.concat([header, creators.serialize(), holders.serialize()]),
+  );
+
+  assert.equal(index.slot, 7);
+  assert.equal(index.mightBeCreator(creator), true);
+  assert.equal(index.mightBeShareholder(holder), true);
+  // Two filters of different sizes, read back to back and kept apart.
+  assert.equal(index.mightBeShareholder(creator), false);
+  assert.equal(index.mightBeCreator(holder), false);
+  assert.equal(index.shareholders.log2Bits, 17);
+});
+
+test('an index in the old one-filter format is rebuilt, not read', () => {
+  const header = Buffer.alloc(64);
+  header.write('DFHCIDX1', 0, 'ascii');
+  const old = Buffer.concat([header, createBloom({ log2Bits: 16 }).serialize()]);
+  assert.throws(() => deserializeCreatorIndex(old), /older format/);
 });

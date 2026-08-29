@@ -398,3 +398,57 @@ export async function attachDistributions(
 
   return out;
 }
+
+/**
+ * Every address that holds a share in anyone's sharing config, as a filter.
+ *
+ * Finding fees held for you in someone else's config means reading every
+ * config on the chain — a flat 24 seconds however many wallets you own. Cheap
+ * per wallet, but not cheap enough to do on every scan, so it sat behind a
+ * flag and people who never passed it never learned the money was there.
+ *
+ * This is the question asked once and published: is this address a shareholder
+ * anywhere at all? For almost everyone the answer is no for every wallet they
+ * own, and the whole 24-second read can be skipped without asking the chain.
+ * For anyone it says yes to, the full scan runs exactly as before.
+ *
+ * One-sided, like the creator filter, and in the same direction: a false
+ * positive costs a scan that finds nothing, a false negative would hide money.
+ *
+ * Complete in two passes for the same reason the lookup is: the slice reaches
+ * the first `INLINE_SLOTS` shareholders, and the configs holding more are
+ * fetched in full afterwards rather than left half-read.
+ */
+export async function buildShareholderBloom(rpcEndpoint, options = {}) {
+  const { bloom, connection, onProgress, fetchImpl, limiter } = options;
+  const run = (fn) => (limiter ? limiter(fn) : fn());
+  const overflow = [];
+  let configs = 0;
+
+  const scanned = await withRetry(
+    () =>
+      streamProgramAccounts(rpcEndpoint, PUMP_FEES_PROGRAM, {
+        commitment: 'confirmed',
+        ...(fetchImpl ? { fetchImpl } : {}),
+        filters: [{ memcmp: { offset: 0, bytes: encodeBase58(SHARING_CONFIG_DISCRIMINATOR) } }],
+        dataSlice: { offset: SHAREHOLDERS_OFFSET - 4, length: 4 + INLINE_SLOTS * SHAREHOLDER_SIZE },
+        onAccount: ({ pubkey, data }) => {
+          configs++;
+          const { count, shareholders } = readShareholders(data, 0, INLINE_SLOTS);
+          if (count > INLINE_SLOTS) overflow.push(new PublicKey(pubkey));
+          for (const sh of shareholders) bloom.add(sh.address.toBuffer());
+          if (onProgress && configs % 100000 === 0)
+            onProgress({ configs, overflow: overflow.length });
+        },
+      }),
+    { attempts: 4, baseDelayMs: 1000 },
+  );
+
+  // The tail the slice could not reach. Skipping it would drop shareholders
+  // sitting past the second slot, which is the one failure this must not have.
+  const tail = await fetchConfigs({ ...connection, rpcEndpoint }, overflow, run);
+  for (const cfg of tail) for (const sh of cfg.shareholders) bloom.add(sh.address.toBuffer());
+
+  onProgress?.({ configs: scanned, overflow: overflow.length, done: true });
+  return { configs: scanned, overflow: overflow.length };
+}

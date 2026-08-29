@@ -58,8 +58,9 @@ ${c.bold('Options')}
   --index-shards <n>   concurrent reads the index build is split into (default
                        256; 0 reads each program in one request, which the
                        public RPC truncates without saying so)
-  --find-shares        also hunt fees held for you in team sharing configs (slower)
-  --no-share-index     with --find-shares: probe 27 slots per wallet instead of
+  --no-find-shares     skip the hunt for fees held for you in team sharing
+                       configs (on by default; usually free, see --creator-index)
+  --no-share-index     with the share hunt: probe 27 slots per wallet instead of
                        reading the configs once (slower; the old behaviour)
   --bags               also scan/claim Bags positions (needs BAGS_API_KEY)
                        note: authenticated responses are not yet confirmed live
@@ -167,11 +168,110 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     minDelayMs: Number(args['rpc-delay'] ?? 0),
   });
 
+  // Every coin on the chain names its creator. Reading that one field from all
+  // of them costs two streamed requests and answers, locally and for free,
+  // the question the scan was paying three lookups per wallet to ask.
+  //
+  // Not on by default: building it reads two whole programs, which is minutes
+  // well spent on a hundred thousand wallets and minutes wasted on five. Once
+  // built it is cached, and a cached index is picked up on its own.
+  let indexRetries = 0;
+  const creatorIndex = await (async () => {
+    const indexPath =
+      typeof args['index-file'] === 'string' ? args['index-file'] : defaultIndexPath();
+    if (
+      args['creator-index'] ||
+      args['rebuild-index'] ||
+      (existsSync(indexPath) && !args['no-creator-index'])
+    ) {
+      try {
+        const built = await openCreatorIndex({
+          rpcEndpoint: rpc,
+          path: indexPath,
+          currentSlot: await connection.getSlot('confirmed'),
+          rebuild: Boolean(args['rebuild-index']),
+          // A prebuilt index is minutes saved, but it decides which wallets are
+          // worth asking about, so it is checked against the chain before use.
+          url: args['no-index-download'] ? null : (args['index-url'] ?? DEFAULT_INDEX_URL),
+          onEvent: (e) => {
+            if (e.type === 'loaded') {
+              clearProgress();
+              console.error(
+                c.dim(
+                  `creator index: ${count(e.index.counts['bonding curves'])} curves + ` +
+                    `${count(e.index.counts.pools)} pools, ${count(e.ageSlots)} slots old`,
+                ),
+              );
+            }
+            if (e.type === 'stale') progress('creator index is stale, rebuilding');
+            if (e.type === 'downloaded') {
+              clearProgress();
+              console.error(
+                c.dim(
+                  'creator index downloaded and checked against the chain ' +
+                    `(${count(e.present)}/${count(e.checked)} known creators present` +
+                    `${e.missing ? `; ${e.missing} newer than the index` : ''})`,
+                ),
+              );
+            }
+            if (e.type === 'download-stale') progress('published index is stale, building instead');
+            if (e.type === 'download-failed') {
+              clearProgress();
+              console.error(c.yellow(`published index not used: ${e.message}`));
+            }
+            if (e.type === 'building')
+              progress('reading every coin on the chain (one pass, minutes)');
+            if (e.type === 'built') {
+              clearProgress();
+              console.error(c.dim(`creator index written to ${e.path}`));
+            }
+          },
+          concurrency: Number(args.concurrency ?? 8),
+          shards: Number(args['index-shards'] ?? 256),
+          onProgress: (src, seen) =>
+            progress(
+              `creator index - ${src} ${count(seen)}` +
+                (indexRetries ? ` - ${indexRetries} retries` : ''),
+            ),
+          onRetry: () => {
+            indexRetries++;
+          },
+        });
+        clearProgress();
+        return built;
+      } catch (e) {
+        clearProgress();
+        die(`creator index failed: ${e.message}`);
+      }
+    }
+    return null;
+  })();
+
+  // Fee-sharing money is invisible to a per-wallet scan, so not looking for it
+  // is how people leave it behind. It is looked for unless asked not to.
+  //
+  // What makes that affordable is the shareholder filter in the creator index:
+  // it answers, locally and for nothing, whether any of these wallets holds a
+  // share anywhere. For almost everyone that is no for every wallet, and the
+  // whole read is skipped. A "yes" - or no filter at all - runs the full scan.
+  const findShares = await (async () => {
+    if (args['no-find-shares']) return false;
+    if (!creatorIndex) return true;
+    const owned = await collectWallets(walletsPath);
+    // `null` means this index carries no shareholder filter, which is not a
+    // "no" - only a definite `false` for every wallet allows skipping.
+    if (owned.some((w) => creatorIndex.mightBeShareholder(w.publicKey) !== false)) return true;
+    console.error(
+      c.dim(`no shares held by any of ${count(owned.length)} wallet(s) - skipping the config scan`),
+    );
+    return false;
+  })();
+
   // One streamed read of every sharing config, answering all wallets, instead
   // of 27 filtered requests each. On by default: it is faster even for a
   // single wallet, and the stream keeps it to tens of megabytes.
   let shareIndex;
-  if (args['find-shares'] && !args['no-share-index']) {
+  if (findShares && !args['no-share-index']) {
     try {
       shareIndex = await buildShareholderIndex(connection, await collectWallets(walletsPath), {
         limiter: shareLimiter,
@@ -189,82 +289,6 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
     }
   }
 
-  // Every coin on the chain names its creator. Reading that one field from all
-  // of them costs two streamed requests and answers, locally and for free,
-  // the question the scan was paying three lookups per wallet to ask.
-  //
-  // Not on by default: building it reads two whole programs, which is minutes
-  // well spent on a hundred thousand wallets and minutes wasted on five. Once
-  // built it is cached, and a cached index is picked up on its own.
-  let creatorIndex = null;
-  let indexRetries = 0;
-  const indexPath =
-    typeof args['index-file'] === 'string' ? args['index-file'] : defaultIndexPath();
-  if (
-    args['creator-index'] ||
-    args['rebuild-index'] ||
-    (existsSync(indexPath) && !args['no-creator-index'])
-  ) {
-    try {
-      creatorIndex = await openCreatorIndex({
-        rpcEndpoint: rpc,
-        path: indexPath,
-        currentSlot: await connection.getSlot('confirmed'),
-        rebuild: Boolean(args['rebuild-index']),
-        // A prebuilt index is minutes saved, but it decides which wallets are
-        // worth asking about, so it is checked against the chain before use.
-        url: args['no-index-download'] ? null : (args['index-url'] ?? DEFAULT_INDEX_URL),
-        onEvent: (e) => {
-          if (e.type === 'loaded') {
-            clearProgress();
-            console.error(
-              c.dim(
-                `creator index: ${count(e.index.counts['bonding curves'])} curves + ` +
-                  `${count(e.index.counts.pools)} pools, ${count(e.ageSlots)} slots old`,
-              ),
-            );
-          }
-          if (e.type === 'stale') progress('creator index is stale, rebuilding');
-          if (e.type === 'downloaded') {
-            clearProgress();
-            console.error(
-              c.dim(
-                'creator index downloaded and checked against the chain ' +
-                  `(${count(e.present)}/${count(e.checked)} known creators present` +
-                  `${e.missing ? `; ${e.missing} newer than the index` : ''})`,
-              ),
-            );
-          }
-          if (e.type === 'download-stale') progress('published index is stale, building instead');
-          if (e.type === 'download-failed') {
-            clearProgress();
-            console.error(c.yellow(`published index not used: ${e.message}`));
-          }
-          if (e.type === 'building')
-            progress('reading every coin on the chain (one pass, minutes)');
-          if (e.type === 'built') {
-            clearProgress();
-            console.error(c.dim(`creator index written to ${e.path}`));
-          }
-        },
-        concurrency: Number(args.concurrency ?? 8),
-        shards: Number(args['index-shards'] ?? 256),
-        onProgress: (src, seen) =>
-          progress(
-            `creator index - ${src} ${count(seen)}` +
-              (indexRetries ? ` - ${indexRetries} retries` : ''),
-          ),
-        onRetry: () => {
-          indexRetries++;
-        },
-      });
-      clearProgress();
-    } catch (e) {
-      clearProgress();
-      die(`creator index failed: ${e.message}`);
-    }
-  }
-
   let rows = [];
   let retries = 0;
   try {
@@ -274,7 +298,7 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
       // would run only on wallets that had already survived the filter.
       enrich: (batch) =>
         attachDistributions(connection, batch, {
-          findShares: Boolean(args['find-shares']),
+          findShares,
           shareIndex,
           limiter: shareLimiter,
           onProgress: (n, total) => progress(`shareholder scan ${count(n)}/${count(total)}`),
@@ -459,7 +483,7 @@ async function main() {
       rpc,
       port: Number(args.port ?? 4600),
       allowExecute: Boolean(args.execute),
-      findShares: Boolean(args['find-shares']),
+      findShares: !args['no-find-shares'],
       concurrency: Number(args.concurrency ?? 8),
       rpcDelayMs: Number(args['rpc-delay'] ?? 0),
     });

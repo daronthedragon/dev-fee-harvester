@@ -21,6 +21,8 @@ import {
 import { createLimiter, delay } from '../src/limit.mjs';
 import { bondingCurve, pumpCreatorVault, sharingConfig } from '../src/pda.mjs';
 import { packBatches, workItems } from '../src/claim.mjs';
+import { buildShareholderBloom } from '../src/sharing.mjs';
+import { createBloom } from '../src/bloom.mjs';
 
 /** Build a SharingConfig account body matching the on-chain layout. */
 function buildConfig(mint, shareholders, { active = true, admin = PublicKey.default } = {}) {
@@ -420,4 +422,68 @@ test('asking about no wallets does not read the chain at all', async () => {
   const index = await buildShareholderIndex(chain, [], { fetchImpl: chain.fetchImpl });
   assert.equal(index.size, 0);
   assert.equal(chain.calls.getProgramAccounts, 0);
+});
+
+test('the shareholder filter reaches past the slice, into the configs that hold more', async () => {
+  // Pass A only reads the first two shareholder slots. A config with more is
+  // refetched in full afterwards — and if that pass is skipped, the extra
+  // shareholders are missing from the filter, so their wallets get told there
+  // is nothing to find. That is the failure this exists to prevent.
+  const SHAREHOLDERS_OFFSET = 80;
+  const SHAREHOLDER_SIZE = 34;
+  const INLINE = 2;
+
+  const inline = [Keypair.generate().publicKey, Keypair.generate().publicKey];
+  const pastTheSlice = [Keypair.generate().publicKey, Keypair.generate().publicKey];
+  const all = [...inline, ...pastTheSlice];
+
+  const full = Buffer.alloc(1024);
+  Buffer.from(SHARING_CONFIG_DISCRIMINATOR).copy(full, 0);
+  full.writeUInt32LE(all.length, SHAREHOLDERS_OFFSET - 4);
+  all.forEach((pk, i) => {
+    pk.toBuffer().copy(full, SHAREHOLDERS_OFFSET + i * SHAREHOLDER_SIZE);
+    full.writeUInt16LE(2500, SHAREHOLDERS_OFFSET + i * SHAREHOLDER_SIZE + 32);
+  });
+
+  const configAddress = Keypair.generate().publicKey;
+  const sliced = full.subarray(
+    SHAREHOLDERS_OFFSET - 4,
+    SHAREHOLDERS_OFFSET + INLINE * SHAREHOLDER_SIZE,
+  );
+
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    body: (async function* () {
+      yield Buffer.from(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          result: [
+            {
+              pubkey: configAddress.toBase58(),
+              account: { data: [sliced.toString('base64'), 'base64'] },
+            },
+          ],
+          id: 1,
+        }),
+      );
+    })(),
+  });
+
+  const bloom = createBloom({ log2Bits: 18 });
+  const result = await buildShareholderBloom('http://rpc.test', {
+    bloom,
+    fetchImpl,
+    connection: {
+      async getMultipleAccountsInfo() {
+        return [{ owner: PUMP_FEES_PROGRAM, data: full, lamports: 1 }];
+      },
+    },
+  });
+
+  assert.equal(result.configs, 1);
+  assert.equal(result.overflow, 1, 'the config was recognised as holding more than the slice');
+  for (const pk of all) {
+    assert.equal(bloom.has(pk.toBuffer()), true, `${pk.toBase58()} missing from the filter`);
+  }
 });
