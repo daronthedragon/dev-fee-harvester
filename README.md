@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-225%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-226%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -256,7 +256,19 @@ So the published index carries a second filter: **is this address a shareholder 
 no shares held by any of 1,204 wallet(s) - skipping the config scan
 ```
 
-That made it affordable to look by default. `--no-find-shares` opts out.
+That made it affordable to look by default. `--no-find-shares` opts out. Checked against mainnet the same way the creator filter is:
+
+```
+downloaded in 1.6s
+  shareholders 2^24, 625,593 entries
+
+real shareholders sampled : 300
+  filter says "not one"   : 0  (none - correct)
+fresh keypairs tested     : 20000
+  filter says "maybe"     : 0
+
+a wallet set of 20000 strangers would SKIP the 24s config scan entirely
+```
 
 The filter answers `false`, `true`, or `null`, and the third one matters: `null` means this index carries no shareholder filter, which is not the same as "no". Only a definite `false` for every wallet allows skipping — an index that cannot answer runs the full scan. Making `null` behave like `false` fails a test, because it would silently skip the hunt for everyone.
 
@@ -527,7 +539,7 @@ Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags
 ## Development
 
 ```bash
-npm test                    # 225 tests, no network required
+npm test                    # 226 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script
