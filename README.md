@@ -9,7 +9,7 @@ and drains them in batched transactions instead of one transaction per wallet.
 
 [![CI](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml/badge.svg)](https://github.com/daronthedragon/dev-fee-harvester/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-213%20passing-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen)](#development)
 [![Verified on mainnet](https://img.shields.io/badge/instructions-simulated%20on%20mainnet-2f81f7)](#how-this-was-verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-1-lightgrey)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -226,6 +226,23 @@ The build is split into 256 concurrent reads, one per value of the first byte of
 | 256 shards  |    13,741,332 | ~3,468,078 | 796s |
 
 The public endpoint cuts a large response off when its data allowance runs out, and nothing about that looks like a failure — it looks like a program with fewer accounts than it has. The quick read was quick because it stopped early, and it left out **more than half the creators**, every one of them a wallet the scan would then never go looking for. Shards are small enough to finish. `--index-shards 0` restores the single read.
+
+The first build does not have to happen at all. A prebuilt index is published with each release, so the usual first run is a download:
+
+```
+download: 0.7s   2^26 bits, 13,741,332 accounts behind it
+verify  : 3.5s   199/200 present, 1 newer than the index
+
+download + check: 4.1s
+local build     : 796.2s
+faster          : 193x
+```
+
+**It is never used on trust.** A filter decides which wallets are worth asking about, so a wrong one costs money quietly — every wallet missing from it is skipped and the scan reports no fees rather than an error. Parsing it is not enough; an index of the wrong program parses perfectly. So it is checked against the chain it claims to describe: one request reads a shard of real coins, takes the creators off them, and asks how many the filter knows. A failed check falls through to building locally rather than aborting.
+
+Not all of them, and the threshold is the point. Every index is a snapshot and pump.fun never stops minting, so a creator whose first coin is newer than the snapshot is legitimately absent — the first live check missed exactly 1 of 200 for that reason. An index of the wrong program misses about 200 of 200. Those are far enough apart to separate cleanly.
+
+What that proves is that the filter describes _this_ chain. It does not prove the filter is complete, and no snapshot ever is: it trails the chain by however old it is. That is why the creator index is a flag rather than the default, and why `--no-creator-index` asks about every wallet instead. `--no-index-download` always builds locally.
 
 Truncation is now an error rather than a short answer: a response whose body ends anywhere but at the closing brace of its envelope is rejected, and an index that comes back with nobody in it is refused rather than cached, since as a filter it would rule out every wallet and report no fees anywhere.
 
@@ -452,38 +469,40 @@ A few details that are easy to get wrong, and are pinned by tests:
 
 ## Options
 
-| Flag                 |                                                                           |
-| -------------------- | ------------------------------------------------------------------------- |
-| `--wallets <path>`   | wallets JSON / JSONL file, or a directory of keypair files                |
-| `--rpc <url>`        | RPC endpoint. A private one is strongly recommended                       |
-| `--payer <key>`      | who pays fees, by label or pubkey                                         |
-| `--min <sol>`        | ignore wallets below this amount                                          |
-| `--all`              | take every claimable wallet, no picker                                    |
-| `--execute`          | actually send. Without it, everything is simulated                        |
-| `--priority-fee <n>` | compute unit price in micro-lamports                                      |
-| `--max-per-tx <n>`   | actions per transaction (default 8)                                       |
-| `--batch-size <n>`   | wallets scanned per pass (default 1000)                                   |
-| `--concurrency <n>`  | parallel RPC requests (default 8)                                         |
-| `--workers <n>`      | threads for address derivation (default cores−1, max 8; `0` disables)     |
-| `--rpc-delay <ms>`   | minimum gap between RPC requests, for strict rate limits                  |
-| `--progress <mode>`  | `auto` (default), `always`, or `never` — the status line while scanning   |
-| `--out <file.jsonl>` | append every funded wallet as it is found                                 |
-| `--receipts <file>`  | append a JSONL record of every transaction as it is sent                  |
-| `--creator-index`    | read every coin's creator once, then skip wallets that never made one     |
-| `--index-file <p>`   | where that index is cached (default `~/.dev-fee-harvester/creators.idx`)  |
-| `--rebuild-index`    | rebuild the creator index even if a fresh one is cached                   |
-| `--index-shards <n>` | concurrent reads the build is split into (default 256; `0` = one request) |
-| `--find-shares`      | also hunt fees held for you in team sharing configs                       |
-| `--bags`             | include Bags positions (needs `BAGS_API_KEY`)                             |
-| `--no-preflight`     | skip the per-action simulation pass                                       |
-| `--json`             | machine-readable scan output                                              |
+| Flag                  |                                                                           |
+| --------------------- | ------------------------------------------------------------------------- |
+| `--wallets <path>`    | wallets JSON / JSONL file, or a directory of keypair files                |
+| `--rpc <url>`         | RPC endpoint. A private one is strongly recommended                       |
+| `--payer <key>`       | who pays fees, by label or pubkey                                         |
+| `--min <sol>`         | ignore wallets below this amount                                          |
+| `--all`               | take every claimable wallet, no picker                                    |
+| `--execute`           | actually send. Without it, everything is simulated                        |
+| `--priority-fee <n>`  | compute unit price in micro-lamports                                      |
+| `--max-per-tx <n>`    | actions per transaction (default 8)                                       |
+| `--batch-size <n>`    | wallets scanned per pass (default 1000)                                   |
+| `--concurrency <n>`   | parallel RPC requests (default 8)                                         |
+| `--workers <n>`       | threads for address derivation (default cores−1, max 8; `0` disables)     |
+| `--rpc-delay <ms>`    | minimum gap between RPC requests, for strict rate limits                  |
+| `--progress <mode>`   | `auto` (default), `always`, or `never` — the status line while scanning   |
+| `--out <file.jsonl>`  | append every funded wallet as it is found                                 |
+| `--receipts <file>`   | append a JSONL record of every transaction as it is sent                  |
+| `--creator-index`     | read every coin's creator once, then skip wallets that never made one     |
+| `--index-file <p>`    | where that index is cached (default `~/.dev-fee-harvester/creators.idx`)  |
+| `--rebuild-index`     | rebuild the creator index even if a fresh one is cached                   |
+| `--index-shards <n>`  | concurrent reads the build is split into (default 256; `0` = one request) |
+| `--index-url <url>`   | where to fetch a prebuilt creator index from                              |
+| `--no-index-download` | always build the index locally instead of fetching one                    |
+| `--find-shares`       | also hunt fees held for you in team sharing configs                       |
+| `--bags`              | include Bags positions (needs `BAGS_API_KEY`)                             |
+| `--no-preflight`      | skip the per-action simulation pass                                       |
+| `--json`              | machine-readable scan output                                              |
 
 Environment: `RPC`, `WALLETS` and `BAGS_API_KEY` stand in for the matching flags. `FORCE_COLOR=1` keeps colour when output is piped or recorded; `NO_COLOR` always wins.
 
 ## Development
 
 ```bash
-npm test                    # 213 tests, no network required
+npm test                    # 221 tests, no network required
 npm run test:browser        # just the browser tests
 npm run browsers:install    # fetch Firefox and WebKit (optional)
 npm run lint                # eslint, including the dashboard's inline script

@@ -1,20 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Keypair, PublicKey } from '@solana/web3.js';
-import { createBloom, deserializeBloom } from '../src/bloom.mjs';
+import { createBloom, deserializeBloom, foldBloom } from '../src/bloom.mjs';
 import { decodeBase58 } from '../src/base58.mjs';
 import {
   CREATOR_SOURCES,
   buildCreatorIndex,
   deserializeCreatorIndex,
   openCreatorIndex,
+  verifyCreatorIndex,
 } from '../src/creator-index.mjs';
 import { PUMPSWAP_PROGRAM, PUMP_PROGRAM } from '../src/constants.mjs';
 
 const keys = (n) => Array.from({ length: n }, () => Keypair.generate().publicKey);
+
+/**
+ * Keys that land in the shard `verifyCreatorIndex` samples.
+ *
+ * The check reads one shard of the chain, and the stub honours that filter, so
+ * random keys almost never appear in it — about one in 256 does. Tests built
+ * on random keys passed on luck and would fail on a different draw.
+ */
+const SAMPLED_SHARD = 0x2a;
+const shardKeys = (n) =>
+  Array.from({ length: n }, () => {
+    const raw = Buffer.from(Keypair.generate().publicKey.toBuffer());
+    raw[0] = SAMPLED_SHARD;
+    return new PublicKey(raw);
+  });
 
 /**
  * A getProgramAccounts response in the shape mainnet actually returns:
@@ -201,6 +218,7 @@ test('a cached index is reused, and a stale one is rebuilt', async () => {
 
   const built = await openCreatorIndex({
     rpcEndpoint: 'http://rpc.test',
+    url: null,
     path,
     currentSlot: 1000,
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: first }),
@@ -211,6 +229,7 @@ test('a cached index is reused, and a stale one is rebuilt', async () => {
   // Fresh: loaded from disk without touching the RPC at all.
   const reused = await openCreatorIndex({
     rpcEndpoint: 'http://rpc.test',
+    url: null,
     path,
     currentSlot: 1100,
     fetchImpl: () => assert.fail('a fresh cached index must not hit the RPC'),
@@ -221,6 +240,7 @@ test('a cached index is reused, and a stale one is rebuilt', async () => {
   // Stale: rebuilt, and the new content is what is returned.
   const rebuilt = await openCreatorIndex({
     rpcEndpoint: 'http://rpc.test',
+    url: null,
     path,
     currentSlot: 1000 + 216_001,
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: second }),
@@ -241,6 +261,7 @@ test('a corrupt cache is rebuilt rather than trusted', async () => {
 
   const index = await openCreatorIndex({
     rpcEndpoint: 'http://rpc.test',
+    url: null,
     path,
     currentSlot: 10,
     fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: creators }),
@@ -261,6 +282,7 @@ test('an index with nobody in it is refused, not cached', async () => {
     () =>
       openCreatorIndex({
         rpcEndpoint: 'http://rpc.test',
+        url: null,
         path,
         currentSlot: 1,
         fetchImpl: stubFetch({}),
@@ -268,4 +290,177 @@ test('an index with nobody in it is refused, not cached', async () => {
     /empty/,
   );
   assert.equal(existsSync(path), false, 'and nothing was written to disk');
+});
+
+test('folding a filter smaller never loses a key', () => {
+  // The published index is folded down from the one built locally, so this is
+  // the property that keeps a download from silently skipping wallets.
+  const big = createBloom({ log2Bits: 20 });
+  const present = keys(300);
+  for (const pk of present) big.add(pk.toBuffer());
+
+  for (const size of [19, 18, 16]) {
+    const small = foldBloom(big, size);
+    assert.equal(small.log2Bits, size);
+    assert.equal(small.bytes.length, 2 ** size / 8);
+    for (const pk of present) {
+      assert.equal(small.has(pk.toBuffer()), true, `${pk.toBase58()} lost at ${size} bits`);
+    }
+  }
+});
+
+test('folding costs false positives, and reports them honestly', () => {
+  const big = createBloom({ log2Bits: 22 });
+  for (const pk of keys(2000)) big.add(pk.toBuffer());
+  const small = foldBloom(big, 16);
+  // Smaller filter, more collisions — the rate it reports must go up with it.
+  assert.ok(
+    small.falsePositiveRate() > big.falsePositiveRate(),
+    'a folded filter must not claim to be as accurate as the original',
+  );
+});
+
+test('a filter cannot be folded upwards', () => {
+  const bloom = createBloom({ log2Bits: 16 });
+  assert.throws(() => foldBloom(bloom, 20), /cannot fold/);
+  assert.equal(foldBloom(bloom, 16), bloom, 'folding to its own size is a no-op');
+});
+
+/**
+ * A fetch that serves a published index at `url` and otherwise behaves like
+ * the chain stub, so the download path and its check can both be driven.
+ */
+function stubWithDownload(indexBytes, chainCreators, url = 'http://cdn.test/creators.idx.gz') {
+  const chain = stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators });
+  return async (target, init) => {
+    if (target === url) {
+      return { ok: true, status: 200, arrayBuffer: async () => gzipSync(indexBytes) };
+    }
+    return chain(target, init);
+  };
+}
+
+test('a published index is downloaded instead of built', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfh-idx-'));
+  const path = join(dir, 'creators.idx');
+  // Keys in the shard the check samples, so the test does not depend on a
+  // random draw landing there.
+  const chainCreators = shardKeys(40);
+  // Everything the chain will hand back for the check must be in the index.
+  const built = await buildCreatorIndex('http://rpc.test', {
+    slot: 900,
+    sources: [CREATOR_SOURCES[0]],
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
+  });
+
+  const events = [];
+  const index = await openCreatorIndex({
+    rpcEndpoint: 'http://rpc.test',
+    url: 'http://cdn.test/creators.idx.gz',
+    path,
+    currentSlot: 1000,
+    fetchImpl: stubWithDownload(built.serialize(), chainCreators),
+    onEvent: (e) => events.push(e.type),
+  });
+
+  assert.deepEqual(events, ['downloaded']);
+  assert.equal(index.slot, 900);
+  for (const pk of chainCreators) assert.equal(index.mightBeCreator(pk), true);
+  assert.ok(existsSync(path), 'and it is cached so the next run skips the download');
+});
+
+test('an index that does not match the chain is rejected and built instead', async () => {
+  // The failure that matters: a filter that parses perfectly but describes
+  // something else. Every wallet missing from it is skipped silently.
+  const dir = mkdtempSync(join(tmpdir(), 'dfh-idx-'));
+  const path = join(dir, 'creators.idx');
+  const wrong = await buildCreatorIndex('http://rpc.test', {
+    slot: 900,
+    sources: [CREATOR_SOURCES[0]],
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: shardKeys(50) }),
+  });
+  const chainCreators = shardKeys(40);
+
+  const events = [];
+  const index = await openCreatorIndex({
+    rpcEndpoint: 'http://rpc.test',
+    url: 'http://cdn.test/creators.idx.gz',
+    path,
+    currentSlot: 1000,
+    fetchImpl: stubWithDownload(wrong.serialize(), chainCreators),
+    onEvent: (e) => events.push(e.type),
+  });
+
+  assert.deepEqual(events, ['download-failed', 'building', 'built']);
+  // The built index is the real one, and the rejected download is not cached.
+  for (const pk of chainCreators) assert.equal(index.mightBeCreator(pk), true);
+});
+
+test('the check reads real creators and measures how many the index knows', async () => {
+  const chainCreators = shardKeys(40);
+  const good = await buildCreatorIndex('http://rpc.test', {
+    sources: [CREATOR_SOURCES[0]],
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
+  });
+  const { checked } = await verifyCreatorIndex(good, 'http://rpc.test', {
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
+  });
+  assert.ok(checked > 0, 'it must actually have sampled something');
+
+  const empty = createBloom({ log2Bits: 16 });
+  await assert.rejects(
+    () =>
+      verifyCreatorIndex({ mightBeCreator: (k) => empty.has(Buffer.from(k)) }, 'http://rpc.test', {
+        fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators }),
+      }),
+    /does not describe this chain/,
+  );
+});
+
+test('creators newer than the index do not fail the check, but a wrong index does', async () => {
+  // Every index is a snapshot and pump.fun never stops minting, so a creator
+  // whose first coin is newer than the snapshot is legitimately absent. The
+  // check has to tell that apart from an index of something else entirely.
+  const onChain = shardKeys(200);
+  const known = onChain.slice(0, 190); // 10 coins created after the snapshot
+
+  const mostly = createBloom({ log2Bits: 20 });
+  for (const pk of known) mostly.add(pk.toBuffer());
+  const asIndex = (bloom) => ({ mightBeCreator: (k) => bloom.has(Buffer.from(k)) });
+
+  const ok = await verifyCreatorIndex(asIndex(mostly), 'http://rpc.test', {
+    fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: onChain }),
+  });
+  assert.equal(ok.missing, 10, 'the newer ones are reported, not hidden');
+  assert.ok(ok.present / ok.checked >= 0.9);
+
+  // Half missing is not a stale snapshot, it is a different chain.
+  const half = createBloom({ log2Bits: 20 });
+  for (const pk of onChain.slice(0, 100)) half.add(pk.toBuffer());
+  await assert.rejects(
+    () =>
+      verifyCreatorIndex(asIndex(half), 'http://rpc.test', {
+        fetchImpl: stubFetch({ [PUMP_PROGRAM.toBase58()]: onChain }),
+      }),
+    /does not describe this chain/,
+  );
+});
+
+test('a download that fails falls through to building, it does not abort', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfh-idx-'));
+  const events = [];
+  const chainCreators = shardKeys(20);
+  const index = await openCreatorIndex({
+    rpcEndpoint: 'http://rpc.test',
+    url: 'http://cdn.test/creators.idx.gz',
+    path: join(dir, 'creators.idx'),
+    currentSlot: 10,
+    fetchImpl: async (target, init) => {
+      if (target === 'http://cdn.test/creators.idx.gz') return { ok: false, status: 404 };
+      return stubFetch({ [PUMP_PROGRAM.toBase58()]: chainCreators })(target, init);
+    },
+    onEvent: (e) => events.push(e.type),
+  });
+  assert.deepEqual(events, ['download-failed', 'building', 'built']);
+  assert.ok(index.added > 0);
 });

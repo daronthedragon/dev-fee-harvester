@@ -21,7 +21,7 @@ import { preflight } from '../src/preflight.mjs';
 import { scanStream } from '../src/scan.mjs';
 import { defaultWorkerCount } from '../src/derive.mjs';
 import { createLimiter } from '../src/limit.mjs';
-import { defaultIndexPath, openCreatorIndex } from '../src/creator-index.mjs';
+import { DEFAULT_INDEX_URL, defaultIndexPath, openCreatorIndex } from '../src/creator-index.mjs';
 import { attachDistributions, buildShareholderIndex } from '../src/sharing.mjs';
 import { multiSelect } from '../src/select.mjs';
 import { startDashboard } from '../src/server.mjs';
@@ -53,6 +53,8 @@ ${c.bold('Options')}
                        never launched one. Cached; reused automatically after.
   --index-file <path>  where to keep that index (default ~/.dev-fee-harvester/creators.idx)
   --rebuild-index      rebuild the creator index even if a fresh one is cached
+  --index-url <url>    where to fetch a prebuilt creator index from
+  --no-index-download  always build the index locally instead of fetching one
   --index-shards <n>   concurrent reads the index build is split into (default
                        256; 0 reads each program in one request, which the
                        public RPC truncates without saying so)
@@ -209,6 +211,9 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
         path: indexPath,
         currentSlot: await connection.getSlot('confirmed'),
         rebuild: Boolean(args['rebuild-index']),
+        // A prebuilt index is minutes saved, but it decides which wallets are
+        // worth asking about, so it is checked against the chain before use.
+        url: args['no-index-download'] ? null : (args['index-url'] ?? DEFAULT_INDEX_URL),
         onEvent: (e) => {
           if (e.type === 'loaded') {
             clearProgress();
@@ -220,6 +225,21 @@ async function loadAndScan(args, { requireSigner = false } = {}) {
             );
           }
           if (e.type === 'stale') progress('creator index is stale, rebuilding');
+          if (e.type === 'downloaded') {
+            clearProgress();
+            console.error(
+              c.dim(
+                'creator index downloaded and checked against the chain ' +
+                  `(${count(e.present)}/${count(e.checked)} known creators present` +
+                  `${e.missing ? `; ${e.missing} newer than the index` : ''})`,
+              ),
+            );
+          }
+          if (e.type === 'download-stale') progress('published index is stale, building instead');
+          if (e.type === 'download-failed') {
+            clearProgress();
+            console.error(c.yellow(`published index not used: ${e.message}`));
+          }
           if (e.type === 'building')
             progress('reading every coin on the chain (one pass, minutes)');
           if (e.type === 'built') {

@@ -114,6 +114,35 @@ function fromParts(log2Bits, hashes, bits, added) {
 }
 
 /**
+ * Halve a filter's size, repeatedly, without ever introducing a false negative.
+ *
+ * The bit index for a key is `readUInt32LE(window) & mask`. Shrinking the mask
+ * by one bit maps index `j` and index `j + m/2` onto the same `j`, so folding
+ * the top half onto the bottom half with OR lands every key's bits exactly
+ * where the smaller filter would have put them. Nothing a key set can be lost;
+ * only unrelated bits collide, which costs false positives and never a missed
+ * wallet.
+ *
+ * Used to publish a smaller filter than the one built locally, so a download
+ * is megabytes rather than tens of them.
+ */
+export function foldBloom(bloom, log2Bits) {
+  if (log2Bits > bloom.log2Bits) {
+    throw new Error(`cannot fold ${bloom.log2Bits} bits up to ${log2Bits}`);
+  }
+  if (log2Bits === bloom.log2Bits) return bloom;
+
+  let bits = bloom.bytes;
+  for (let size = bloom.log2Bits; size > log2Bits; size--) {
+    const half = bits.length / 2;
+    const folded = Buffer.alloc(half);
+    for (let i = 0; i < half; i++) folded[i] = bits[i] | bits[i + half];
+    bits = folded;
+  }
+  return fromParts(log2Bits, bloom.hashes, bits, bloom.added);
+}
+
+/**
  * Rebuild a filter from `serialize()` output. Rejects anything it does not
  * recognise rather than returning a filter that answers `no` to everything —
  * which would look exactly like a chain with no creators on it.

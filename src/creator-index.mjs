@@ -15,14 +15,15 @@
  * chain about it at all.
  *
  * The set is far too large to keep (13.7M coins, 3.47M distinct creators as of
- * writing), so it is streamed into a Bloom filter: 16MB, fixed, no matter how
- * much the chain grows. The filter only ever errs towards doing an unnecessary lookup, never
- * towards skipping a wallet that has money in it.
+ * writing), so it is streamed into a Bloom filter of fixed size, no matter how
+ * much the chain grows. The filter only ever errs towards doing an unnecessary
+ * lookup, never towards skipping a wallet that has money in it.
  *
  * Costs, measured rather than estimated — see README.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { PublicKey } from '@solana/web3.js';
@@ -224,6 +225,7 @@ export async function openCreatorIndex({
   currentSlot = 0,
   maxAgeSlots = DEFAULT_MAX_AGE_SLOTS,
   rebuild = false,
+  url = DEFAULT_INDEX_URL,
   onEvent,
   onProgress,
   fetchImpl,
@@ -246,6 +248,31 @@ export async function openCreatorIndex({
     }
   }
 
+  // Building reads the whole chain and takes minutes. A published index is
+  // the same thing already read, so try that first — but never on trust: it
+  // decides which wallets are worth asking about, and one that is wrong skips
+  // them silently. It is checked against the chain before it is used, and a
+  // failed check falls through to building rather than aborting.
+  if (url) {
+    try {
+      const downloaded = await downloadCreatorIndex(url, fetchImpl ? { fetchImpl } : {});
+      const age = Math.max(0, currentSlot - downloaded.slot);
+      if (age > maxAgeSlots) {
+        onEvent?.({ type: 'download-stale', url, ageSlots: age });
+      } else {
+        const checked = await verifyCreatorIndex(downloaded, rpcEndpoint, {
+          ...(fetchImpl ? { fetchImpl } : {}),
+        });
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, downloaded.serialize());
+        onEvent?.({ type: 'downloaded', url, path, index: downloaded, ...checked });
+        return downloaded;
+      }
+    } catch (e) {
+      onEvent?.({ type: 'download-failed', url, message: e.message });
+    }
+  }
+
   onEvent?.({ type: 'building', path });
   const index = await buildCreatorIndex(rpcEndpoint, { slot: currentSlot, onProgress, fetchImpl });
 
@@ -265,6 +292,97 @@ export async function openCreatorIndex({
   writeFileSync(path, index.serialize());
   onEvent?.({ type: 'built', path, index });
   return index;
+}
+
+/**
+ * Where a prebuilt index is published, so a first run is a download rather
+ * than a thirteen-minute read of the whole chain.
+ */
+export const DEFAULT_INDEX_URL =
+  'https://github.com/daronthedragon/dev-fee-harvester/releases/download/index/creators.idx.gz';
+
+/** Fetch a published index. Accepts the gzipped form or the raw one. */
+export async function downloadCreatorIndex(url, { fetchImpl = fetch } = {}) {
+  const res = await fetchImpl(url, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`index download -> HTTP ${res.status}`);
+  const body = Buffer.from(await res.arrayBuffer());
+  // gzip magic. Published as .gz; accepting both keeps a plain file usable.
+  const bytes = body[0] === 0x1f && body[1] === 0x8b ? gunzipSync(body) : body;
+  return deserializeCreatorIndex(bytes);
+}
+
+/**
+ * Prove a downloaded index is actually an index of this chain.
+ *
+ * A filter decides which wallets are worth asking about, so a wrong one costs
+ * the user money quietly: every wallet it does not contain is skipped, and the
+ * scan reports no fees rather than an error. Parsing it is not enough — an
+ * index of the wrong program, or of nothing, parses perfectly.
+ *
+ * So it is checked against the chain it claims to describe: read one shard of
+ * real coins, take the creators off them, and ask how many the filter knows.
+ * Costs a single request.
+ *
+ * Not all of them, and that is the point of the threshold. Every index is a
+ * snapshot, and pump.fun mints coins continuously, so a creator whose first
+ * coin is newer than the snapshot is legitimately absent — the very first live
+ * check of a freshly published index missed 1 of 200 for exactly that reason.
+ * An index of the wrong program, or an empty one, misses ~200 of 200. Those
+ * two are far enough apart that a ratio separates them cleanly.
+ *
+ * What this proves: the filter describes *this* chain. What it does not prove:
+ * that the filter is complete. Age is a separate question, answered by the
+ * slot it was taken at, and a snapshot always trails the chain by however old
+ * it is — which is why the index is a flag rather than the default, and why
+ * `--no-creator-index` exists for anyone who would rather ask about every
+ * wallet than trust a snapshot.
+ */
+export async function verifyCreatorIndex(
+  index,
+  rpcEndpoint,
+  { sample = 200, shardByte = 0x2a, fetchImpl, source = CREATOR_SOURCES[0], minPresent = 0.9 } = {},
+) {
+  const ENOUGH = Symbol('enough');
+  const seen = [];
+  try {
+    await streamProgramAccounts(rpcEndpoint, source.program, {
+      commitment: 'confirmed',
+      ...(fetchImpl ? { fetchImpl } : {}),
+      filters: [
+        { memcmp: { offset: 0, bytes: source.discriminator, encoding: 'base58' } },
+        {
+          memcmp: {
+            offset: source.creatorOffset,
+            bytes: encodeBase58(Buffer.from([shardByte])),
+            encoding: 'base58',
+          },
+        },
+      ],
+      dataSlice: { offset: source.creatorOffset, length: 32 },
+      onAccount: ({ data }) => {
+        if (data.length !== 32 || isZero(data)) return;
+        seen.push(Buffer.from(data));
+        if (seen.length >= sample) throw ENOUGH;
+      },
+    });
+  } catch (err) {
+    // Stopping early is how the sample is bounded, not a failure.
+    if (err !== ENOUGH)
+      throw new Error(`could not sample the chain to check the index: ${err.message}`);
+  }
+
+  if (seen.length === 0) {
+    throw new Error('could not sample any creators from the chain to check the index against');
+  }
+  const missing = seen.filter((key) => !index.mightBeCreator(key)).length;
+  const present = seen.length - missing;
+  if (present / seen.length < minPresent) {
+    throw new Error(
+      `index failed its check: only ${present} of ${seen.length} creators read straight from ` +
+        'the chain are in it, so it does not describe this chain',
+    );
+  }
+  return { checked: seen.length, present, missing };
 }
 
 /** Rebuild an index written by `serialize()`. */
