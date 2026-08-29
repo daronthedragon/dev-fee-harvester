@@ -46,6 +46,9 @@ const args = new Map(
 const RPC = process.env.RPC || 'https://api.mainnet-beta.solana.com';
 const OUT = args.get('out') ?? 'creators.idx.gz';
 const PUBLISH_BITS = 26;
+/** Far fewer shareholders than creators, so a much smaller filter suffices. */
+const SHAREHOLDER_BITS = 24;
+const MAX_FALSE_POSITIVES = 0.01;
 const SAMPLE = 500;
 /** The chain grows; a build that shrinks by more than this did not finish. */
 const SHRINK_TOLERANCE = 0.01;
@@ -110,18 +113,45 @@ if (published) {
   }
 }
 
-// Fold to the published size and write it out.
+// Gate 3 — the shareholder filter has to be in there. Building it and then
+// dropping it on the way out is silent: the file is the same size to a glance,
+// every other check still passes, and the only symptom is that everyone
+// downloading it goes back to missing team-shared fees.
+if (!index.shareholders) {
+  fail('this build produced no shareholder filter, so it would ship without the share hunt');
+}
+
+// Fold both filters to their published sizes and write them out.
 const folded = foldBloom(index.bloom, PUBLISH_BITS);
+const foldedShareholders = foldBloom(index.shareholders, SHAREHOLDER_BITS);
+for (const [what, f] of [
+  ['creator', folded],
+  ['shareholder', foldedShareholders],
+]) {
+  if (f.falsePositiveRate() > MAX_FALSE_POSITIVES) {
+    fail(
+      `the ${what} filter is ${(f.falsePositiveRate() * 100).toFixed(2)}% false positive at ` +
+        `2^${f.log2Bits} bits, over the ${MAX_FALSE_POSITIVES * 100}% ceiling — it needs more bits`,
+    );
+  }
+}
+
 const header = index.serialize().subarray(0, 64);
-const bytes = gzipSync(Buffer.concat([header, folded.serialize()]), { level: 9 });
+const payload = Buffer.concat([header, folded.serialize(), foldedShareholders.serialize()]);
+const bytes = gzipSync(payload, { level: 9 });
 writeFileSync(OUT, bytes);
 
-// The folded filter is what people actually get, so check that too.
-const reread = deserializeCreatorIndex(Buffer.concat([header, folded.serialize()]));
+// The folded filters are what people actually get, so check those too.
+const reread = deserializeCreatorIndex(payload);
+if (!reread.shareholders) fail('the file written back does not carry a shareholder filter');
 const refolded = await verifyCreatorIndex(reread, RPC, { sample: 200 });
 console.log(
-  `folded to 2^${PUBLISH_BITS}: ${refolded.present}/${refolded.checked} present, ` +
+  `folded creators to 2^${PUBLISH_BITS}: ${refolded.present}/${refolded.checked} present, ` +
     `fp ${(folded.falsePositiveRate() * 100).toPrecision(2)}%`,
+);
+console.log(
+  `folded shareholders to 2^${SHAREHOLDER_BITS}: ${index.shareholders.added.toLocaleString()} ` +
+    `entries, fp ${(foldedShareholders.falsePositiveRate() * 100).toPrecision(2)}%`,
 );
 
 console.log('');
